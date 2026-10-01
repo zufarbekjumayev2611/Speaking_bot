@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Imtihon</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #f6f8fb);
+    --surface: var(--tg-theme-secondary-bg-color, #ffffff);
+    --text: var(--tg-theme-text-color, #16202e);
+    --hint: var(--tg-theme-hint-color, #6f7c8c);
+    --cobalt: #1e4fa3;          /* Iznik koshinlari ko'ki */
+    --turquoise: #12a095;
+    --clay: #c2413a;
+    --line: color-mix(in srgb, var(--text) 12%, transparent);
+    --safe-b: env(safe-area-inset-bottom, 0px);
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+  }
+  main {
+    min-height: 100%;
+    max-width: 520px;
+    margin: 0 auto;
+    padding: 20px 20px calc(24px + var(--safe-b));
+    display: flex;
+    flex-direction: column;
+  }
+  h1 { font-size: 26px; line-height: 1.15; margin: 8px 0 10px; letter-spacing: -0.02em; }
+  p { margin: 0 0 12px; line-height: 1.5; }
+  .muted { color: var(--hint); font-size: 14.5px; }
+  .grow { flex: 1; }
+
+  .btn {
+    width: 100%;
+    border: 0;
+    border-radius: 14px;
+    padding: 16px;
+    font: inherit;
+    font-size: 16px;
+    font-weight: 650;
+    color: #fff;
+    background: var(--cobalt);
+  }
+  .btn:active { transform: scale(0.985); }
+  .btn:disabled { opacity: 0.5; }
+  .btn.ghost { background: transparent; color: var(--cobalt); border: 1.5px solid var(--line); }
+  .btn:focus-visible { outline: 3px solid var(--turquoise); outline-offset: 2px; }
+
+  /* ---------- Kirish ---------- */
+  .rules { list-style: none; padding: 0; margin: 18px 0 24px; }
+  .rules li { display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); line-height: 1.45; font-size: 15px; }
+  .rules li span:first-child { font-size: 20px; }
+
+  /* ---------- Savol ---------- */
+  .steps { display: flex; gap: 5px; margin-bottom: 18px; }
+  .steps i { flex: 1; height: 4px; border-radius: 2px; background: var(--line); }
+  .steps i.done { background: var(--turquoise); }
+  .steps i.now { background: var(--cobalt); }
+  .q-label { font-size: 13.5px; color: var(--hint); margin-bottom: 6px; }
+  .q-text { font-size: 21px; line-height: 1.35; font-weight: 600; letter-spacing: -0.01em; margin: 0 0 14px; }
+  .q-photo { width: 100%; max-height: 38vh; object-fit: contain; border-radius: 12px; background: var(--surface); margin-bottom: 8px; }
+
+  .dial { position: relative; width: 210px; height: 210px; margin: 18px auto 8px; }
+  .dial.compact { width: 130px; height: 130px; margin: 12px auto 4px; }
+  .dial.compact .dial-time { font-size: 34px; }
+
+  /* Part 3: lehine / aleyhine jadvali - gapirish davomida ko'rinib turadi */
+  .debate-wrap { overflow-x: auto; margin-bottom: 6px; }
+  .debate { width: 100%; border-collapse: collapse; font-size: 14px; line-height: 1.4; table-layout: fixed; }
+  .debate th, .debate td { border: 1px solid var(--line); padding: 8px 8px; vertical-align: top; text-align: left; }
+  .debate th { font-size: 14.5px; }
+  .debate th.pro { color: var(--turquoise); }
+  .debate th.con { color: var(--clay); }
+  .debate ul { margin: 0; padding-left: 16px; }
+  .debate li { margin-bottom: 6px; }
+  .debate li:last-child { margin-bottom: 0; }
+  .dial svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+  .dial .track { stroke: var(--line); }
+  .dial .arc { stroke: var(--cobalt); stroke-linecap: round; transition: stroke 0.3s; }
+  .dial.recording .arc { stroke: var(--clay); }
+  .dial-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  .dial-time { font-size: 52px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.03em; }
+  .dial-state { font-size: 14px; color: var(--hint); margin-top: 2px; }
+  .dial.recording .dial-state { color: var(--clay); font-weight: 600; }
+  .dial.recording::after {
+    content: ""; position: absolute; inset: 22px; border-radius: 50%;
+    background: color-mix(in srgb, var(--clay) 10%, transparent);
+    animation: breathe 1.6s ease-in-out infinite; z-index: -1;
+  }
+  @keyframes breathe { 50% { transform: scale(1.08); opacity: 0.4; } }
+  @media (prefers-reduced-motion: reduce) { .dial.recording::after { animation: none; } }
+
+  /* ---------- Holatlar ---------- */
+  .center { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 14px; }
+  .spinner { width: 34px; height: 34px; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--cobalt); animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ---------- Natija ---------- */
+  .score { display: flex; align-items: baseline; gap: 12px; margin: 6px 0 4px; }
+  .score b { font-size: 64px; line-height: 1; letter-spacing: -0.04em; }
+  .score span { color: var(--hint); font-size: 18px; }
+  .level { display: inline-block; padding: 4px 12px; border-radius: 8px; background: var(--cobalt); color: #fff; font-weight: 700; margin-bottom: 14px; }
+  .bars { margin: 16px 0 8px; }
+  .bar { margin-bottom: 12px; }
+  .bar-top { display: flex; justify-content: space-between; font-size: 14.5px; margin-bottom: 5px; }
+  .bar-track { height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 4px; background: var(--turquoise); }
+  h2 { font-size: 17px; margin: 22px 0 8px; }
+  .mistake { padding: 11px 0; border-bottom: 1px solid var(--line); font-size: 15px; line-height: 1.45; }
+  .wrong { color: var(--clay); text-decoration: line-through; }
+  .right { color: var(--turquoise); font-weight: 600; }
+  .note { color: var(--hint); font-size: 13.5px; }
+  .tips { padding-left: 18px; margin: 0; line-height: 1.5; }
+  .tips li { margin-bottom: 6px; }
+</style>
+</head>
+<body>
+<main id="app">
+  <!-- Yuklanish -->
+  <section class="center" id="loading">
+    <div class="spinner"></div>
+    <p class="muted" id="loadingText">Imtihon yuklanmoqda…</p>
+  </section>
+
+  <!-- Xato -->
+  <section class="center" id="error" hidden>
+    <div style="font-size:40px">⚠️</div>
+    <p id="errorText"></p>
+    <button class="btn" id="errorRetry" hidden>Qayta urinish</button>
+  </section>
+
+  <!-- Kirish -->
+  <section id="intro" hidden>
+    <h1 id="examTitle"></h1>
+    <p class="muted" id="examMeta"></p>
+    <ul class="rules">
+      <li><span>🤫</span><span>Tinch joyda bo'ling va telefonni og'zingizga yaqin tuting.</span></li>
+      <li><span>⏳</span><span>Har savoldan oldin tayyorlanish vaqti beriladi, keyin yozuv o'zi boshlanadi.</span></li>
+      <li><span id="langFlag">🗣</span><span id="langRule">Imtihon tilida, to'liq gaplar bilan javob bering.</span></li>
+      <li><span>↩️</span><span>Javobni qayta yozib bo'lmaydi — xuddi haqiqiy imtihondagidek.</span></li>
+    </ul>
+    <div class="grow"></div>
+    <p class="muted" style="text-align:center">Boshlaganda mikrofonga ruxsat so'raladi.</p>
+    <button class="btn" id="startBtn">Imtihonni boshlash</button>
+  </section>
+
+  <!-- Savol -->
+  <section id="question" hidden style="display:flex;flex-direction:column;flex:1">
+    <div class="steps" id="steps"></div>
+    <div class="q-label" id="qLabel"></div>
+    <p class="q-text" id="qText"></p>
+    <div class="debate-wrap" id="qTable" hidden></div>
+    <img class="q-photo" id="qPhoto" alt="Savol rasmi" hidden />
+    <div class="dial" id="dial">
+      <svg viewBox="0 0 120 120" aria-hidden="true">
+        <circle class="track" cx="60" cy="60" r="54" fill="none" stroke-width="6" />
+        <circle class="arc" id="arc" cx="60" cy="60" r="54" fill="none" stroke-width="6" />
+      </svg>
+      <div class="dial-center">
+        <div class="dial-time" id="dialTime">0</div>
+        <div class="dial-state" id="dialState"></div>
+      </div>
+    </div>
+    <div class="grow"></div>
+    <button class="btn" id="actionBtn"></button>
+  </section>
+
+  <!-- Natija -->
+  <section id="result" hidden>
+    <p class="muted" id="resTitle" style="margin-top:8px"></p>
+    <div class="score"><b id="resBand"></b><span id="resBandMax"></span></div>
+    <span class="level" id="resLevel"></span>
+    <p id="resReason"></p>
+    <p class="muted" id="resRaw"></p>
+    <p id="resSummary"></p>
+    <div class="bars" id="resBars"></div>
+    <div id="resMistakesWrap"><h2>Asosiy xatolar</h2><div id="resMistakes"></div></div>
+    <div id="resTipsWrap"><h2>Tavsiyalar</h2><ul class="tips" id="resTips"></ul></div>
+    <p class="muted" style="margin-top:20px">Baho Bilimni baholash agentligining rasmiy mezonlari asosida qo'yildi. Talaffuz baholanmaydi. Natija bot chatiga ham yuborildi.</p>
+    <button class="btn" id="closeBtn" style="margin-top:8px">Yopish</button>
+  </section>
+</main>
+
+<script>
+const tg = window.Telegram?.WebApp;
+tg?.ready();
+tg?.expand();
+tg?.disableVerticalSwipes?.();
+
+const $ = (id) => document.getElementById(id);
+const SCREENS = ["loading", "error", "intro", "question", "result"];
+const show = (name) => SCREENS.forEach((s) => ($(s).hidden = s !== name));
+const initData = tg?.initData || "";
+const examId = new URLSearchParams(location.search).get("exam");
+
+let exam = null;          // {attempt_id, title, questions}
+let stream = null;        // mikrofon oqimi (butun imtihon davomida bitta)
+let index = 0;
+let timer = null;
+const uploads = [];       // har savol yozuvining yuklanish jarayoni
+
+// ---------- Yordamchilar ----------
+async function api(path, options = {}) {
+  const res = await fetch(path, { ...options, headers: { ...(options.headers || {}), "X-Init-Data": initData } });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Server bilan aloqa uzildi. Internetni tekshiring.");
+  return data;
+}
+
+function fail(message, retry) {
+  $("errorText").textContent = message;
+  $("errorRetry").hidden = !retry;
+  $("errorRetry").onclick = retry;
+  tg?.disableClosingConfirmation?.();
+  show("error");
+}
+
+function haptic(type) { tg?.HapticFeedback?.notificationOccurred?.(type); }
+
+const CIRC = 2 * Math.PI * 54;
+$("arc").style.strokeDasharray = CIRC;
+function setDial(left, total) {
+  $("dialTime").textContent = Math.max(0, Math.ceil(left));
+  $("arc").style.strokeDashoffset = CIRC * (1 - Math.max(0, left) / total);
+}
+
+function countdown(seconds, onTick, onDone) {
+  clearInterval(timer);
+  const end = Date.now() + seconds * 1000;
+  onTick(seconds);
+  timer = setInterval(() => {
+    const left = (end - Date.now()) / 1000;
+    onTick(left);
+    if (left <= 0) { clearInterval(timer); onDone(); }
+  }, 200);
+}
+
+function pickMime() {
+  const options = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"];
+  return options.find((m) => window.MediaRecorder?.isTypeSupported?.(m)) || "";
+}
+
+// ---------- Part 3 jadvali ----------
+// Admin savolni shunday yozadi:
+//   Mavzu savoli?
+//   Lehine:
+//   - birinchi dalil
+//   Aleyhine:
+//   - birinchi dalil
+// Bot uni ikki ustunli jadval qilib ko'rsatadi (tayyorlanish va gapirish davomida).
+const PRO_RE = /^(lehine|lehinde|tarafdor|yoqlovchi|for|pros?)\s*:?$/i;
+const CON_RE = /^(aleyhine|aleyhinde|qarshi|against|cons?)\s*:?$/i;
+
+function parseDebate(text) {
+  const lines = String(text || "").split("\n").map((l) => l.trim()).filter(Boolean);
+  const pro = lines.findIndex((l) => PRO_RE.test(l));
+  const con = lines.findIndex((l) => CON_RE.test(l));
+  if (pro < 1 || con <= pro + 1 || con === lines.length - 1) return null;
+  const clean = (l) => l.replace(/^[-•*–—\d.)\s]+/, "").trim();
+  return {
+    title: lines.slice(0, pro).join(" "),
+    proLabel: lines[pro].replace(/:$/, ""),
+    conLabel: lines[con].replace(/:$/, ""),
+    pros: lines.slice(pro + 1, con).map(clean).filter(Boolean),
+    cons: lines.slice(con + 1).map(clean).filter(Boolean),
+  };
+}
+
+function debateTable(d) {
+  const list = (items) => `<ul>${items.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>`;
+  return `<table class="debate"><thead><tr>
+      <th class="pro">${esc(d.proLabel)}</th><th class="con">${esc(d.conLabel)}</th>
+    </tr></thead><tbody><tr><td>${list(d.pros)}</td><td>${list(d.cons)}</td></tr></tbody></table>`;
+}
+
+// ---------- 1. Yuklash ----------
+async function load() {
+  if (!initData) return fail("Bu sahifani bot ichidagi tugma orqali oching.");
+  if (!examId) return fail("Imtihon tanlanmagan. Botga qaytib, imtihonni qayta tanlang.");
+  try {
+    exam = await api(`/api/exam/${examId}`);
+  } catch (e) {
+    return fail(e.message, load);
+  }
+  $("examTitle").textContent = exam.title;
+  if (exam.section_name) document.title = exam.section_name;
+  if (exam.flag) $("langFlag").textContent = exam.flag;
+  if (exam.answer_rule) $("langRule").textContent = exam.answer_rule;
+  const total = exam.questions.reduce((s, q) => s + q.prep_sec + q.answer_sec, 0);
+  const partLine = exam.part_name ? `${exam.part_name} • ` : "";
+  $("examMeta").textContent = `${partLine}${exam.questions.length} ta savol, taxminan ${Math.ceil(total / 60)} daqiqa`;
+  show("intro");
+}
+
+// ---------- 2. Boshlash ----------
+$("startBtn").onclick = async () => {
+  if (!window.MediaRecorder) {
+    return fail("Bu qurilmada ovoz yozish qo'llab-quvvatlanmaydi. Telegram'ni yangilang yoki boshqa telefondan urinib ko'ring.");
+  }
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+  } catch {
+    return fail("Mikrofonga ruxsat berilmadi. Telefon sozlamalarida Telegram'ga mikrofon ruxsatini yoqing va qayta oching.");
+  }
+  tg?.enableClosingConfirmation?.();
+  index = 0;
+  askQuestion();
+};
+
+// ---------- 3. Savol: tayyorlanish -> yozish ----------
+function askQuestion() {
+  const q = exam.questions[index];
+  $("steps").innerHTML = exam.questions
+    .map((_, i) => `<i class="${i < index ? "done" : i === index ? "now" : ""}"></i>`).join("");
+  $("qLabel").textContent = `${index + 1}-savol, jami ${exam.questions.length} ta`;
+  const debate = parseDebate(q.text);
+  $("qText").textContent = debate ? debate.title : q.text;
+  $("qTable").hidden = !debate;
+  $("qTable").innerHTML = debate ? debateTable(debate) : "";
+  $("dial").classList.toggle("compact", !!debate);
+  $("qPhoto").hidden = !q.photo;
+  if (q.photo) $("qPhoto").src = q.photo;
+  show("question");
+  $("question").style.display = "flex";
+
+  if (q.prep_sec > 0) prepare(q); else record(q);
+}
+
+function prepare(q) {
+  $("dial").classList.remove("recording");
+  $("dialState").textContent = "tayyorlaning";
+  $("actionBtn").textContent = "Tayyorman, gapirishni boshlash";
+  $("actionBtn").onclick = () => record(q);
+  countdown(q.prep_sec, (left) => setDial(left, q.prep_sec), () => record(q));
+}
+
+function record(q) {
+  clearInterval(timer);
+  const mime = pickMime();
+  const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+  const chunks = [];
+  recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+  recorder.onstop = () => {
+    const blob = new Blob(chunks, { type: recorder.mimeType || mime || "audio/webm" });
+    const duration = (Date.now() - startedAt) / 1000;
+    uploads.push(uploadWithRetry(q.id, blob, duration));
+    next();
+  };
+  recorder.start(1000);
+  const startedAt = Date.now();
+  haptic("success");
+
+  $("dial").classList.add("recording");
+  $("dialState").textContent = "yozilmoqda";
+  $("actionBtn").textContent = "Javobni yakunlash";
+  let stopped = false;
+  const stop = () => { if (!stopped) { stopped = true; clearInterval(timer); recorder.stop(); } };
+  $("actionBtn").onclick = stop;
+  countdown(q.answer_sec, (left) => setDial(left, q.answer_sec), stop);
+}
+
+function next() {
+  index += 1;
+  if (index < exam.questions.length) askQuestion(); else finish();
+}
+
+// ---------- 4. Yuklash (fonda, keyingi savol kutib turmaydi) ----------
+async function uploadWithRetry(questionId, blob, duration, attempts = 3) {
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      const form = new FormData();
+      form.append("attempt_id", exam.attempt_id);
+      form.append("question_id", questionId);
+      form.append("audio", blob, "answer");
+      form.append("duration", duration.toFixed(1));
+      return await api("/api/answer", { method: "POST", body: form });
+    } catch (e) {
+      if (i === attempts) throw e;
+      await new Promise((r) => setTimeout(r, 1500 * i));
+    }
+  }
+}
+
+// ---------- 5. Yakunlash va baholash ----------
+async function finish() {
+  stream?.getTracks().forEach((t) => t.stop());
+  show("loading");
+  $("loadingText").textContent = "Javoblaringiz yuborilmoqda…";
+  const results = await Promise.allSettled(uploads);
+  const failed = results.filter((r) => r.status === "rejected");
+  if (failed.length === results.length) {
+    return fail(failed[0].reason?.message || "Javoblar yuborilmadi.", finish);
+  }
+  $("loadingText").textContent = "Sun'iy intellekt baholamoqda… (10–20 soniya)";
+  try {
+    const result = await api("/api/finish", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ attempt_id: exam.attempt_id }),
+    });
+    showResult(result);
+  } catch (e) {
+    fail(e.message, finish);
+  }
+}
+
+// ---------- 6. Natija ----------
+const LABELS = { grammar: "Grammatika", vocabulary: "So'z boyligi", fluency: "Ravonlik", coherence: "Izchillik" };
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function showResult(r) {
+  tg?.disableClosingConfirmation?.();
+  haptic("success");
+  const c = (r.components && r.components[0]) || {};
+  $("resTitle").textContent = exam.part_name ? `${exam.title} • ${exam.part_name}` : exam.title;
+  $("resBand").textContent = c.band ?? "–";
+  $("resBandMax").textContent = ` / ${c.max ?? 5}`;
+  $("resLevel").textContent = c.label || r.level;
+  $("resReason").textContent = c.reason || "";
+  $("resRaw").textContent = r.total != null ? `Standart ball: ${r.total} / ${r.max_total || 75} (${r.level})` : "Rasmiy mezon bo'yicha ekspert bahosi";
+  $("resSummary").textContent = "";
+  const notes = c.notes || {};
+  $("resBars").innerHTML = Object.entries(LABELS)
+    .filter(([k]) => notes[k])
+    .map(([k, label]) => `<div class="mistake"><b>${label}</b><div class="note">${esc(notes[k])}</div></div>`)
+    .join("");
+  const mistakes = r.mistakes || [];
+  $("resMistakesWrap").hidden = !mistakes.length;
+  $("resMistakes").innerHTML = mistakes.map((m) =>
+    `<div class="mistake"><span class="wrong">${esc(m.wrong)}</span> → <span class="right">${esc(m.correct)}</span>
+     <div class="note">${esc(m.note)}</div></div>`).join("");
+  const tips = r.tips || [];
+  $("resTipsWrap").hidden = !tips.length;
+  $("resTips").innerHTML = tips.map((t) => `<li>${esc(t)}</li>`).join("");
+  show("result");
+}
+
+$("closeBtn").onclick = () => tg?.close();
+load();
+</script>
+</body>
+</html>
