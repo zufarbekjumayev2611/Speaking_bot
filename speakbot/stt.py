@@ -1,7 +1,10 @@
 """Nutqni matnga aylantirish: Groq Whisper (bepul rejada kuniga ~8 soat audio)."""
 import aiohttp
 
-from config import GROQ_API_KEY, STT_MODEL
+from config import EXAM_LANGUAGE, GROQ_API_KEY, STT_MODEL
+from languages import LANGUAGES
+
+LANG = LANGUAGES[EXAM_LANGUAGE]
 
 GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 
@@ -21,12 +24,11 @@ async def transcribe(audio: bytes, mime: str) -> str:
     form = aiohttp.FormData()
     form.add_field("file", audio, filename=f"answer.{ext}", content_type=mime or "audio/webm")
     form.add_field("model", STT_MODEL)
-    form.add_field("language", "tr")
+    form.add_field("language", LANG["whisper_code"])
     form.add_field("response_format", "json")
     form.add_field("temperature", "0")
-    # Whisper odatda "ııı", "şey" kabi to'xtalishlarni o'chirib tashlaydi. Bu namuna
-    # uni nutqni boricha yozishga undaydi - ravonlikni baholash uchun kerak.
-    form.add_field("prompt", "Iıı, şey... yani, ben, ee, şimdi düşünüyorum. Sözlü sınav kaydı.")
+    # Whisper to'xtalishlarni (um, ııı...) o'chirib tashlamasligi uchun namuna - ravonlikni baholashga kerak.
+    form.add_field("prompt", LANG["whisper_prompt"])
 
     async with aiohttp.ClientSession() as session:
         async with session.post(
