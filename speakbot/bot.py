@@ -1,12 +1,14 @@
 """Telegram bot: o'quvchi uchun Speaking va Writing bo'limlari, admin uchun panel.
 
 O'quvchi:  Speaking -> tur (Part 1.1 / 1.2 / 2 / 3) -> imtihon -> mini app
-           Writing  -> tur (Task 1.1 / 1.2 / 2) -> mavzu -> matnni xabar qilib yuboradi
-Admin:     yangi imtihon -> Speaking yoki Writing -> tur -> nom -> savollar / topshiriq matni
+           Writing  -> tur (1-qism: ikki xat / 2-qism: blog) -> mavzu -> matnni xabar qilib yuboradi
+Admin:     yangi imtihon -> Speaking yoki Writing -> tur -> nom -> savollar / topshiriq
+           (writing topshirig'i bosqichma-bosqich so'raladi: xat, ko'rsatmalar, ixtiyoriy rasm)
 """
 import html
 import json
 import logging
+import re
 import time
 
 from aiogram import F, Router
@@ -63,27 +65,67 @@ class NewQuestion(StatesGroup):
 
 class WritingTask(StatesGroup):
     text = State()
+    photo = State()
 
 
 class WritingAnswer(StatesGroup):
     text = State()
 
 
-WRITING_TASK_HINT = {
-    "1": (
-        "Rasmiy formatda topshiriq quyidagilardan iborat bo'ladi:\n"
-        "1) vaziyat (masalan: <i>Siz sayohat klubining a'zosisiz. Klubdan quyidagi xatni oldingiz:</i>);\n"
-        "2) 50–80 so'zli xat matni - unda o'quvchi javob berishi kerak bo'lgan 3 ta band bo'lsin;\n"
-        "3) 1-xat ko'rsatmasi: do'stingizga yozing (~50 so'z);\n"
-        "4) 2-xat ko'rsatmasi: menejerga / rahbariyatga yozing (120–150 so'z)."
-    ),
-    "2": (
-        "Rasmiy formatda: janr (blog posti, forum posti yoki maqola), muhokama qilinadigan fikr "
-        "yoki savol va talab (180–200 so'z). Masalan: <i>Siz onlayn ishlashning ijobiy va salbiy "
-        "jihatlari haqida blog posti yozmoqdasiz. O'z fikringizni bayon qiling va misollar keltiring. "
-        "180–200 so'z yozing.</i>"
-    ),
+# Writing topshirig'i admin'dan bosqichma-bosqich so'raladi (bitta katta xabar o'rniga):
+# har bir bosqich - (kalit, sarlavha, tushuntirish, maksimal belgi soni).
+TASK_STEPS = {
+    "1": [
+        ("letter", "Vaziyat va kelgan xat",
+         "Vaziyatni va o'quvchi javob berishi kerak bo'lgan xat matnini yozing.\n"
+         "Masalan: <i>Siz sayohat klubining a'zosisiz. Klubdan quyidagi xatni oldingiz:</i> va uning ostida "
+         "50–80 so'zli xat (unda javob berilishi kerak bo'lgan 3 ta band bo'lsin).", 1500),
+        ("inst1", "1-xat ko'rsatmasi (norasmiy)",
+         "Do'stga yoziladigan xat uchun ko'rsatma. Masalan: <i>Do'stingizga xat yozing. Unga voqea haqida "
+         "gapirib bering va uni taklif qiling. Taxminan 50 so'z yozing.</i>", 600),
+        ("inst2", "2-xat ko'rsatmasi (rasmiy)",
+         "Rahbariyatga / menejerga yoziladigan xat uchun ko'rsatma. Masalan: <i>Klub menejeriga xat yozing. "
+         "Shikoyat qiling va yechim so'rang. 120–150 so'z yozing.</i>", 600),
+    ],
+    "2": [
+        ("essay", "Blog / maqola topshirig'i",
+         "Janr (blog posti, forum posti yoki maqola), muhokama qilinadigan fikr yoki savol va hajm talabi.\n"
+         "Masalan: <i>Siz onlayn ishlashning ijobiy va salbiy jihatlari haqida blog posti yozmoqdasiz. "
+         "O'z fikringizni bayon qiling va misollar keltiring. 180–200 so'z yozing.</i>", 2500),
+    ],
 }
+DEFAULT_TASK_STEPS = [("text", "Topshiriq matni", "Topshiriq matnini bitta xabar qilib yuboring.", 2500)]
+
+WRITING_MAX_TASK_CHARS = 3500
+INSTRUCTION_MARKER = "✉️ {n}-xat ko'rsatmasi:"
+
+
+def _task_steps(part: str | None) -> list:
+    return TASK_STEPS.get(part or "", DEFAULT_TASK_STEPS)
+
+
+def _compose_task(part: str | None, parts: dict) -> str:
+    """Bosqichlarda yig'ilgan matnlardan o'quvchiga ko'rinadigan yagona topshiriqni yig'adi."""
+    if part == "1":
+        return (
+            f"{parts['letter']}\n\n"
+            f"{INSTRUCTION_MARKER.format(n=1)} {parts['inst1']}\n\n"
+            f"{INSTRUCTION_MARKER.format(n=2)} {parts['inst2']}"
+        )
+    return "\n\n".join(parts[k] for k, *_ in _task_steps(part))
+
+
+_COMPONENT_NUM = {"email1": 1, "email2": 2}
+
+
+def _instruction_for(task_text: str, key: str) -> str:
+    """1-qism topshirig'idan shu xatga tegishli ko'rsatmani ajratib oladi (bo'lmasa - bo'sh)."""
+    n = _COMPONENT_NUM.get(key)
+    if not n:
+        return ""
+    marker = re.escape(INSTRUCTION_MARKER.format(n=n))
+    m = re.search(marker + r"\s*(.*?)(?:\n\n✉️|\Z)", task_text or "", re.S)
+    return m.group(1).strip() if m else ""
 
 
 def e(value) -> str:
@@ -244,28 +286,46 @@ async def writing_topic(callback: CallbackQuery, state: FSMContext):
     task = questions[0]
     await state.set_state(WritingAnswer.text)
     await state.update_data(exam_id=exam["id"], step=0, texts={})
-    steps = "\n".join(f"• {e(c['name'])} — {e(c['words'])}" for c in info["components"])
+    comps = info["components"]
+    steps = "\n".join(f"{i}. {e(c['name'])} — {e(c['words'])}" for i, c in enumerate(comps, 1))
+    how = (
+        f"Siz <b>{len(comps)} ta alohida matn</b> yozasiz. Har bir matnni navbati bilan, "
+        "<b>bitta xabar</b> qilib yuborasiz."
+        if len(comps) > 1
+        else "Matnni <b>bitta xabar</b> qilib yuborasiz."
+    )
     text = (
         f"✍️ <b>{e(exam['title'])}</b>\n<i>{e(info['name'])}</i>\n\n"
         f"{e(task['text'])}\n\n"
-        f"📏 Yozish kerak:\n{steps}"
+        f"📏 Yozish kerak:\n{steps}\n\n{how}"
     )
     cancel_kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Bekor qilish", callback_data="wr_cancel")]])
     if task["photo_file_id"]:
         await callback.message.answer_photo(task["photo_file_id"])
-    await callback.message.answer(text, parse_mode="HTML")
-    await callback.message.answer(_ask_component_text(info, 0), parse_mode="HTML", reply_markup=cancel_kb)
+    await callback.message.answer(text[:4000], parse_mode="HTML")
+    await callback.message.answer(_ask_component_text(info, 0, task["text"]), parse_mode="HTML", reply_markup=cancel_kb)
     await callback.answer()
 
 
-def _ask_component_text(info: dict, step: int) -> str:
+def _ask_component_text(info: dict, step: int, task_text: str = "") -> str:
     c = info["components"][step]
     total = len(info["components"])
     num = f"({step + 1}/{total}) " if total > 1 else ""
+    instruction = _instruction_for(task_text, c["key"])
+    hint = f"\n📌 <i>{e(instruction)}</i>\n" if instruction else ""
     return (
-        f"✏️ {num}<b>{e(c['name'])}</b> — {e(c['words'])}.\n"
+        f"✏️ {num}<b>{e(c['name'])}</b> — {e(c['words'])}.{hint}\n"
         "Matnni <b>bitta xabar</b> qilib yuboring. Bekor qilish: /cancel"
     )
+
+
+def _words_note(c: dict, count: int) -> str:
+    """Yuborilgan matn hajmi haqida qisqa izoh (talabdan ancha kam bo'lsa - ogohlantirish)."""
+    note = f"📝 {count} so'z"
+    wmin = c.get("wmin")
+    if wmin and count < wmin:
+        note += f" ⚠️ talab: {c['words']} — matn qisqa, bu bahoga ta'sir qilishi mumkin"
+    return note
 
 
 @router.message(WritingAnswer.text, F.text & ~F.text.startswith("/"))
@@ -291,16 +351,21 @@ async def writing_answer(message: Message, state: FSMContext):
     step = data.get("step", 0)
     texts = dict(data.get("texts") or {})
     texts[comps[step]["key"]] = text
+    note = _words_note(comps[step], len(text.split()))
 
     if step + 1 < len(comps):  # 1-qism: endi 2-xatni so'raymiz
         await state.update_data(step=step + 1, texts=texts)
-        return await message.answer("✅ Qabul qilindi.\n\n" + _ask_component_text(info, step + 1), parse_mode="HTML")
+        return await message.answer(
+            f"✅ <b>{e(comps[step]['name'])}</b> qabul qilindi. {note}\n\n"
+            + _ask_component_text(info, step + 1, questions[0]["text"]),
+            parse_mode="HTML",
+        )
 
     await state.clear()  # bir ish ikki marta baholanmasin
     joined = "\n\n".join(f"[{c['name']}]\n{texts.get(c['key'], '')}" for c in comps)
     words = sum(len(t.split()) for t in texts.values())
     submission_id = await db.create_writing_submission(message.from_user.id, exam["id"], joined, words)
-    wait = await message.answer("⏳ Ishingiz rasmiy mezonlar bo'yicha tekshirilmoqda... (10–40 soniya)")
+    wait = await message.answer(f"✅ Qabul qilindi. {note}\n⏳ Ishingiz rasmiy mezonlar bo'yicha tekshirilmoqda... (10–40 soniya)")
 
     try:
         result = await grader.grade_writing(questions[0]["text"], texts, exam["part"])
@@ -495,46 +560,116 @@ async def new_exam_title(message: Message, state: FSMContext):
     await state.clear()
 
     if kind == "writing":
-        await state.set_state(WritingTask.text)
-        await state.update_data(exam_id=exam_id)
-        return await message.answer(
-            "✅ Mavzu yaratildi.\n\nEndi <b>topshiriq matnini</b> bitta xabar qilib yuboring "
-            f"({LANG['name_uz']}da).\n\n{WRITING_TASK_HINT.get(data.get('part'), '')}",
-            parse_mode="HTML",
-        )
+        await message.answer("✅ Mavzu yaratildi.")
+        return await _start_task_flow(message, state, exam_id, data.get("part"))
 
     text, kb = await _exam_view(exam_id)
     await message.answer("✅ Imtihon yaratildi. Endi savollar qo'shing.")
     await message.answer(text, parse_mode="HTML", reply_markup=kb)
 
 
-# ---------- Writing topshiriq matni ----------
+# ---------- Writing topshiriq matni (bosqichma-bosqich) ----------
+
+def _step_prompt(part: str | None, i: int) -> str:
+    steps = _task_steps(part)
+    _, title, hint, limit = steps[i]
+    return (
+        f"📝 <b>Topshiriq — {i + 1}/{len(steps)}: {e(title)}</b>\n\n{hint}\n\n"
+        f"Matnni <b>{LANG['name_uz']}da</b>, bitta xabar qilib yuboring (ko'pi bilan {limit} belgi).\n"
+        "Bekor qilish: /cancel"
+    )
+
+
+async def _start_task_flow(message: Message, state: FSMContext, exam_id: int, part: str | None):
+    await state.clear()
+    await state.set_state(WritingTask.text)
+    await state.update_data(exam_id=exam_id, part=part, ti=0, tparts={}, photo=None)
+    steps = _task_steps(part)
+    intro = (
+        f"Topshiriq {len(steps)} bosqichda so'raladi, so'ng ixtiyoriy rasm qo'shasiz.\n\n"
+        if len(steps) > 1
+        else "Topshiriq matnini yuborasiz, so'ng ixtiyoriy rasm qo'shasiz.\n\n"
+    )
+    await message.answer(intro + _step_prompt(part, 0), parse_mode="HTML")
+
 
 @router.callback_query(F.data.startswith("wtask:"))
 async def writing_task_edit(callback: CallbackQuery, state: FSMContext):
     if not _admin_only(callback.from_user.id):
         return await callback.answer()
-    await state.set_state(WritingTask.text)
-    await state.update_data(exam_id=int(callback.data.split(":")[1]))
-    await callback.message.answer(
-        "Yangi topshiriq matnini yuboring (eski matn almashtiriladi). "
-        "Rasm kerak bo'lsa, rasmni izoh (caption) bilan yuboring."
-    )
+    exam_id = int(callback.data.split(":")[1])
+    exam = await db.get_exam(exam_id)
+    if not exam:
+        return await callback.answer("Mavzu topilmadi.", show_alert=True)
+    await callback.message.answer("♻️ Eski topshiriq yangisi bilan almashtiriladi.")
+    await _start_task_flow(callback.message, state, exam_id, exam.get("part"))
     await callback.answer()
+
+
+def _skip_photo_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⏭ Rasmsiz davom etish", callback_data="wt_nophoto")]])
+
+
+async def _finish_task(message: Message, state: FSMContext, photo: str | None):
+    data = await state.get_data()
+    part = data.get("part")
+    task = _compose_task(part, data["tparts"])[:WRITING_MAX_TASK_CHARS]
+    await db.set_writing_task(data["exam_id"], task, photo)
+    await state.clear()
+    view, kb = await _exam_view(data["exam_id"])
+    await message.answer("✅ Topshiriq saqlandi. Quyida o'quvchi ko'radigan matnni tekshiring. "
+                         "Tayyor bo'lsa, «🟢 O'quvchilarga ochish» tugmasini bosing.")
+    await message.answer(view, parse_mode="HTML", reply_markup=kb)
 
 
 @router.message(WritingTask.text)
 async def writing_task_save(message: Message, state: FSMContext):
+    if not _admin_only(message.from_user.id):
+        return
     text = (message.text or message.caption or "").strip()
-    if not text:
-        return await message.answer("Topshiriq matnini yozing (rasm bo'lsa - izoh sifatida).")
-    photo = message.photo[-1].file_id if message.photo else None
+    if not text or text.startswith("/"):
+        return await message.answer("Matn yuboring (rasm bo'lsa - izoh sifatida). Bekor qilish: /cancel")
     data = await state.get_data()
-    await db.set_writing_task(data["exam_id"], text[:3500], photo)
-    await state.clear()
-    view, kb = await _exam_view(data["exam_id"])
-    await message.answer("✅ Topshiriq saqlandi. Tayyor bo'lsa, «🟢 O'quvchilarga ochish» tugmasini bosing.")
-    await message.answer(view, parse_mode="HTML", reply_markup=kb)
+    part, i = data.get("part"), data.get("ti", 0)
+    steps = _task_steps(part)
+    key, _, _, limit = steps[i]
+    if len(text) > limit:
+        return await message.answer(f"Matn juda uzun ({len(text)} belgi). {limit} belgidan oshmasin — qisqartirib qayta yuboring.")
+
+    tparts = dict(data.get("tparts") or {})
+    tparts[key] = text
+    photo = message.photo[-1].file_id if message.photo else data.get("photo")
+    await state.update_data(tparts=tparts, ti=i + 1, photo=photo)
+
+    if i + 1 < len(steps):
+        return await message.answer("✅ Qabul qilindi.\n\n" + _step_prompt(part, i + 1), parse_mode="HTML")
+    if photo:  # rasm matn bilan birga (izoh sifatida) kelgan bo'lsa - qayta so'ramaymiz
+        return await _finish_task(message, state, photo)
+    await state.set_state(WritingTask.photo)
+    await message.answer(
+        "🖼 Topshiriqqa rasm kerakmi? Rasm yuboring yoki rasmsiz davom eting.",
+        reply_markup=_skip_photo_kb(),
+    )
+
+
+@router.message(WritingTask.photo, F.photo)
+async def writing_task_photo(message: Message, state: FSMContext):
+    if not _admin_only(message.from_user.id):
+        return
+    await _finish_task(message, state, message.photo[-1].file_id)
+
+
+@router.callback_query(WritingTask.photo, F.data == "wt_nophoto")
+async def writing_task_nophoto(callback: CallbackQuery, state: FSMContext):
+    if not _admin_only(callback.from_user.id):
+        return await callback.answer()
+    await callback.answer()
+    await _finish_task(callback.message, state, None)
+
+
+@router.message(WritingTask.photo)
+async def writing_task_photo_wrong(message: Message):
+    await message.answer("Rasm yuboring yoki «⏭ Rasmsiz davom etish» tugmasini bosing.", reply_markup=_skip_photo_kb())
 
 
 # ---------- Ochish / yopish / o'chirish / natijalar ----------

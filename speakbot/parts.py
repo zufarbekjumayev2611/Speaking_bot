@@ -148,13 +148,13 @@ WRITING_PARTS = {
         "words": "1-xat ~50 so'z, 2-xat 120–150 so'z",
         "components": [
             {
-                "key": "email1", "name": "1-xat (norasmiy)", "words": "taxminan 50 so'z",
+                "key": "email1", "name": "1-xat (norasmiy)", "words": "taxminan 50 so'z", "wmin": 35,
                 "style": "norasmiy - do'stga yoki tanishga", "max": 5,
                 "labels": {5: "B2 yoki yuqori", 4: "yuqori B1", 3: "quyi B1", 2: "A2", 1: "A1 yoki past", 0: "javob yo'q"},
                 "rubric": _WR_E1,
             },
             {
-                "key": "email2", "name": "2-xat (rasmiy)", "words": "120–150 so'z",
+                "key": "email2", "name": "2-xat (rasmiy)", "words": "120–150 so'z", "wmin": 100,
                 "style": "rasmiy - rahbariyat, mijozlar xizmati va h.k.", "max": 5,
                 "labels": {5: "C1 yoki yuqori", 4: "yuqori B2", 3: "quyi B2", 2: "B1", 1: "A2", 0: "A2 dan past"},
                 "rubric": _WR_E2,
@@ -167,7 +167,7 @@ WRITING_PARTS = {
         "words": "180–200 so'z",
         "components": [
             {
-                "key": "essay", "name": "Blog / maqola", "words": "180–200 so'z",
+                "key": "essay", "name": "Blog / maqola", "words": "180–200 so'z", "wmin": 150,
                 "style": "publitsistik yoki ilmiy-ommabop", "max": 6,
                 "labels": {6: "C2", 5: "C1", 4: "yuqori B2", 3: "quyi B2", 2: "B1", 1: "A2", 0: "A2 dan past"},
                 "rubric": _WR_2,
