@@ -12,7 +12,10 @@ def _required(name: str) -> str:
 
 BOT_TOKEN = _required("BOT_TOKEN")
 GROQ_API_KEY = _required("GROQ_API_KEY")  # ovozni matnga aylantirish uchun doim kerak
-WEBAPP_URL = _required("WEBAPP_URL").rstrip("/")
+# Render o'zi RENDER_EXTERNAL_URL beradi (https://<nom>.onrender.com) - alohida yozish shart emas.
+WEBAPP_URL = (os.getenv("WEBAPP_URL", "").strip() or os.getenv("RENDER_EXTERNAL_URL", "").strip()).rstrip("/")
+if not WEBAPP_URL:
+    raise RuntimeError("WEBAPP_URL muhit o'zgaruvchisi topilmadi.")
 
 # Adminlar: vergul bilan ajratilgan Telegram ID'lar, masalan "111111111,222222222"
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").replace(" ", "").split(",") if x]
