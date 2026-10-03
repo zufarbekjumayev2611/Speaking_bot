@@ -391,14 +391,14 @@ async def count_active_premium() -> int:
     return row["c"]
 
 
-async def count_checks_today(telegram_id: int) -> int:
-    """Bugun (O'zbekiston vaqti, UTC+5) yakunlangan speaking + writing tekshiruvlari soni."""
+async def count_checks_month(telegram_id: int) -> int:
+    """Shu oy (O'zbekiston vaqti, UTC+5) yakunlangan speaking + writing tekshiruvlari soni."""
     row = await _fetchone(
         """SELECT
              (SELECT COUNT(*) FROM attempts WHERE telegram_id = ?1 AND status = 'done'
-                AND date(created_at, '+5 hours') = date('now', '+5 hours'))
+                AND strftime('%Y-%m', created_at, '+5 hours') = strftime('%Y-%m', 'now', '+5 hours'))
            + (SELECT COUNT(*) FROM writing_submissions WHERE telegram_id = ?1 AND status = 'done'
-                AND date(created_at, '+5 hours') = date('now', '+5 hours')) AS c""",
+                AND strftime('%Y-%m', created_at, '+5 hours') = strftime('%Y-%m', 'now', '+5 hours')) AS c""",
         (telegram_id,),
     )
     return row["c"]
@@ -432,3 +432,30 @@ async def set_setting(key: str, value: str):
         "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         (key, value),
     )
+
+
+# ---------- Foydalanuvchilar ro'yxati (admin uchun) ----------
+
+async def count_users() -> int:
+    return (await _fetchone("SELECT COUNT(*) AS c FROM users"))["c"]
+
+
+async def list_users(offset: int = 0, limit: int = 8):
+    """Eng yangi qo'shilganlar birinchi; premium holati bilan."""
+    return await _fetchall(
+        """SELECT u.telegram_id, u.full_name, u.username, u.joined_at,
+                  (p.until IS NOT NULL AND p.until > ?) AS is_premium
+           FROM users u LEFT JOIN premium p ON p.telegram_id = u.telegram_id
+           ORDER BY u.joined_at DESC, u.telegram_id DESC LIMIT ? OFFSET ?""",
+        (_now().strftime(_FMT), limit, offset),
+    )
+
+
+# ---------- Hamma testlarni o'chirish ----------
+
+async def delete_all_exams() -> int:
+    """Barcha imtihon/mavzularni va ularning savollarini o'chiradi (natijalar tarixi saqlanadi). Soni qaytadi."""
+    n = (await _fetchone("SELECT COUNT(*) AS c FROM exams"))["c"]
+    await _execute("DELETE FROM questions")
+    await _execute("DELETE FROM exams")
+    return n

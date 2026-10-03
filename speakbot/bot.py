@@ -435,7 +435,10 @@ async def _admin_panel_view():
             [InlineKeyboardButton(text=f"{status} {KIND_ICON[kind]} {ex['title']}"[:60], callback_data=f"exam:{ex['id']}")]
         )
     rows.append([InlineKeyboardButton(text="➕ Yangi imtihon / mavzu", callback_data="exam_new")])
+    if exams:
+        rows.append([InlineKeyboardButton(text="🗑 Hamma testlarni o'chirish", callback_data="exams_wipe_ask")])
     rows.append([InlineKeyboardButton(text="📊 Oxirgi natijalar", callback_data="results")])
+    rows.append([InlineKeyboardButton(text="👥 Foydalanuvchilar", callback_data="adm_users:0")])
     rows.append([
         InlineKeyboardButton(text="💎 Premium", callback_data="adm_prem"),
         InlineKeyboardButton(text="👮 Adminlar", callback_data="adm_admins"),
@@ -729,6 +732,40 @@ async def delete_exam(callback: CallbackQuery):
     text, kb = await _admin_panel_view()
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
     await callback.answer("O'chirildi")
+
+
+@router.callback_query(F.data == "exams_wipe_ask")
+async def wipe_exams_ask(callback: CallbackQuery):
+    if not _admin_only(callback.from_user.id):
+        return await callback.answer()
+    exams = await db.list_exams()
+    if not exams:
+        return await callback.answer("O'chiriladigan test yo'q.", show_alert=True)
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Ha, hammasini o'chirish", callback_data="exams_wipe"),
+                InlineKeyboardButton(text="❌ Yo'q", callback_data="admin"),
+            ]
+        ]
+    )
+    await callback.message.edit_text(
+        f"⚠️ <b>Hamma testlar o'chiriladi</b>: {len(exams)} ta imtihon/mavzu va ularning savollari.\n\n"
+        "Foydalanuvchilar, premium va oldingi natijalar saqlanib qoladi. Bu amalni qaytarib bo'lmaydi. Davom etasizmi?",
+        parse_mode="HTML",
+        reply_markup=kb,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "exams_wipe")
+async def wipe_exams(callback: CallbackQuery):
+    if not _admin_only(callback.from_user.id):
+        return await callback.answer()
+    count = await db.delete_all_exams()
+    text, kb = await _admin_panel_view()
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer(f"{count} ta test o'chirildi", show_alert=True)
 
 
 @router.callback_query(F.data == "results")

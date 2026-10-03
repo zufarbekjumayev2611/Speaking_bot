@@ -1,6 +1,6 @@
 """Foydalanuvchi tekshiruv olishi mumkinmi: adminlar va premium - cheklovsiz, qolganlar - kunlik bepul limit."""
 import db
-from config import FREE_DAILY_LIMIT, PREMIUM_ENABLED, is_admin
+from config import FREE_MONTHLY_LIMIT, PREMIUM_ENABLED, is_admin
 
 
 async def check_access(user_id: int) -> tuple[bool, str]:
@@ -9,10 +9,10 @@ async def check_access(user_id: int) -> tuple[bool, str]:
         return True, ""
     if await db.get_premium_until(user_id):
         return True, ""
-    used = await db.count_checks_today(user_id)
-    if used >= FREE_DAILY_LIMIT:
+    used = await db.count_checks_month(user_id)
+    if used >= FREE_MONTHLY_LIMIT:
         return False, (
-            f"Bugungi bepul limit tugadi ({used}/{FREE_DAILY_LIMIT}). "
-            "Ertaga yana urinib ko'ring yoki «💎 Premium» bo'limida cheklovsiz obunani ko'ring."
+            f"Bu oylik bepul limit tugadi ({used}/{FREE_MONTHLY_LIMIT}). "
+            "Limit keyingi oy 1-sanada yangilanadi. Cheklovsiz foydalanish uchun «💎 Premium» bo'limiga o'ting."
         )
     return True, ""

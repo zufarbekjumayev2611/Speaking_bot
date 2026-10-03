@@ -46,10 +46,10 @@ DB_PATH = os.getenv("DB_PATH", "speakbot.db")
 PORT = int(os.getenv("PORT", "8080"))
 
 
-# Premium: bepul foydalanuvchilar kuniga nechta tekshiruv (speaking + writing) olishi mumkin.
+# Premium: bepul foydalanuvchilar OYIGA nechta tekshiruv (speaking + writing) olishi mumkin.
 # PREMIUM_ENABLED=0 bo'lsa - hamma uchun cheklovsiz (premium tizimi o'chiriladi).
 PREMIUM_ENABLED = os.getenv("PREMIUM_ENABLED", "1").strip() not in ("0", "false", "no")
-FREE_DAILY_LIMIT = max(0, int(os.getenv("FREE_DAILY_LIMIT", "2")))
+FREE_MONTHLY_LIMIT = max(0, int(os.getenv("FREE_MONTHLY_LIMIT", "5")))
 
 # Admin paneldan qo'shilgan adminlar (bazadan yuklanadi). ADMIN_IDS - asosiy adminlar (egalar):
 # ularni panel orqali o'chirib bo'lmaydi.

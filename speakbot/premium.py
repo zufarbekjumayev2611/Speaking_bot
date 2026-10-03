@@ -1,6 +1,6 @@
 """Premium obuna va kengaytirilgan admin paneli.
 
-O'quvchi:  «💎 Premium» - holati, bugungi limit, to'lov ma'lumoti.
+O'quvchi:  «💎 Premium» - holati, oylik limit, to'lov ma'lumoti.
 Admin:     💎 Premium (berish / bekor qilish / to'lov matni), 👮 Adminlar (qo'shish / o'chirish),
            📈 Statistika. To'lov QO'LDA kiritiladi: admin foydalanuvchiga necha kunlik premium berishni tanlaydi.
 """
@@ -15,7 +15,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 import db
-from config import ADMIN_IDS, FREE_DAILY_LIMIT, PREMIUM_ENABLED, is_admin, is_owner
+from config import ADMIN_IDS, FREE_MONTHLY_LIMIT, PREMIUM_ENABLED, is_admin, is_owner
 
 log = logging.getLogger("premium")
 
@@ -90,10 +90,10 @@ async def premium_info(message: Message, state: FSMContext):
             f"💎 <b>Premium faol</b>\nTugash sanasi: <b>{_local(until)}</b>\n\nTekshiruvlar soni cheklanmagan.",
             parse_mode="HTML",
         )
-    used = await db.count_checks_today(uid)
+    used = await db.count_checks_month(uid)
     info = await db.get_setting(INFO_KEY, DEFAULT_INFO)
     await message.answer(
-        f"🆓 <b>Bepul reja</b>\nBugun: <b>{used}/{FREE_DAILY_LIMIT}</b> tekshiruv (limit har kuni yangilanadi).\n\n"
+        f"🆓 <b>Bepul reja</b>\nBu oy: <b>{used}/{FREE_MONTHLY_LIMIT}</b> tekshiruv (limit har oyning 1-sanasida yangilanadi).\n\n"
         f"💎 <b>Premium</b> — tekshiruvlar soni cheklanmagan.\n\n{e(info)}",
         parse_mode="HTML",
     )
@@ -128,7 +128,7 @@ async def _notify(bot, user_id: int, text: str):
 async def _premium_view():
     rows = await db.list_active_premium(15)
     total = await db.count_active_premium()
-    lines = [f"💎 <b>Premium</b>\nFaol obunalar: <b>{total}</b> • bepul limit: <b>{FREE_DAILY_LIMIT}</b>/kun\n"]
+    lines = [f"💎 <b>Premium</b>\nFaol obunalar: <b>{total}</b> • bepul limit: <b>{FREE_MONTHLY_LIMIT}</b>/oy\n"]
     if not PREMIUM_ENABLED:
         lines.append("⚠️ Premium tizimi o'chirilgan (PREMIUM_ENABLED=0) — hamma uchun cheklovsiz.\n")
     for r in rows:
@@ -169,6 +169,18 @@ async def grant_start(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+async def _ask_days(target: Message, state: FSMContext, user: dict):
+    await state.clear()
+    await state.update_data(target=user["telegram_id"], label=_who(user))
+    await state.set_state(PremGrant.days)
+    kb = _kb([[_btn(f"{d} kun", f"pgd:{d}") for d in DURATIONS[:2]], [_btn(f"{d} kun", f"pgd:{d}") for d in DURATIONS[2:]]])
+    await target.answer(
+        f"👤 {_who(user)}\n\nNecha kunlik premium beramiz? Tugmani bosing yoki kunlar sonini raqam bilan yozing.",
+        parse_mode="HTML",
+        reply_markup=kb,
+    )
+
+
 @router.message(PremGrant.user)
 async def grant_user(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
@@ -176,14 +188,7 @@ async def grant_user(message: Message, state: FSMContext):
     user = await _resolve(message)
     if not user:
         return
-    await state.update_data(target=user["telegram_id"], label=_who(user))
-    await state.set_state(PremGrant.days)
-    kb = _kb([[_btn(f"{d} kun", f"pgd:{d}") for d in DURATIONS[:2]], [_btn(f"{d} kun", f"pgd:{d}") for d in DURATIONS[2:]]])
-    await message.answer(
-        f"👤 {_who(user)}\n\nNecha kunlik premium beramiz? Tugmani bosing yoki kunlar sonini raqam bilan yozing.",
-        parse_mode="HTML",
-        reply_markup=kb,
-    )
+    await _ask_days(message, state, user)
 
 
 async def _ask_note(target: Message, state: FSMContext, days: int):
@@ -406,6 +411,121 @@ async def admin_remove_do(callback: CallbackQuery):
     text, kb = await _admins_view(callback.from_user.id)
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
     await callback.answer("Olib tashlandi")
+
+
+# ======================================================================
+# ADMIN: 👥 Foydalanuvchilar (ro'yxat -> karta -> premium berish)
+# ======================================================================
+
+USERS_PER_PAGE = 8
+
+
+class UserSearch(StatesGroup):
+    query = State()
+
+
+async def _users_view(page: int):
+    total = await db.count_users()
+    pages = max(1, -(-total // USERS_PER_PAGE))
+    page = min(max(page, 0), pages - 1)
+    users = await db.list_users(page * USERS_PER_PAGE, USERS_PER_PAGE)
+    lines = [f"👥 <b>Foydalanuvchilar</b> — jami {total} ta (sahifa {page + 1}/{pages})\n"
+             "Premium berish uchun foydalanuvchini tanlang yoki qidiring."]
+    rows = []
+    for u in users:
+        label = (u.get("full_name") or u.get("username") or str(u["telegram_id"]))[:28]
+        rows.append([_btn(f"{'💎 ' if u['is_premium'] else ''}{label}", f"usr:{u['telegram_id']}")])
+    nav = []
+    if page > 0:
+        nav.append(_btn("◀️", f"adm_users:{page - 1}"))
+    if page < pages - 1:
+        nav.append(_btn("▶️", f"adm_users:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([_btn("🔎 ID / @username bo'yicha qidirish", "usr_search")])
+    rows.append([_btn("⬅️ Orqaga", "admin")])
+    return "\n".join(lines), _kb(rows)
+
+
+@router.callback_query(F.data.startswith("adm_users:"))
+async def users_menu(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        return await callback.answer()
+    await state.clear()
+    text, kb = await _users_view(int(callback.data.split(":")[1]))
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+async def _user_card(user: dict):
+    uid = user["telegram_id"]
+    until = await db.get_premium_until(uid)
+    used = await db.count_checks_month(uid)
+    status = f"💎 Premium: <b>{_local(until)}</b> gacha" if until else "🆓 Bepul reja"
+    if is_admin(uid):
+        status += " • 👮 admin"
+    text = f"👤 {_who(user)}\n{status}\nBu oy tekshiruvlar: <b>{used}</b>" + ("" if until else f" / {FREE_MONTHLY_LIMIT}")
+    rows = [[_btn("💎 Premium berish / uzaytirish", f"pgu:{uid}")]]
+    if until:
+        rows.append([_btn("➖ Premiumni bekor qilish", f"usr_rv:{uid}")])
+    rows.append([_btn("⬅️ Ro'yxat", "adm_users:0")])
+    return text, _kb(rows)
+
+
+@router.callback_query(F.data.startswith("usr:"))
+async def user_open(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        return await callback.answer()
+    await state.clear()
+    user = await db.find_user(callback.data.split(":")[1])
+    text, kb = await _user_card(user)
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("pgu:"))
+async def user_grant(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        return await callback.answer()
+    user = await db.find_user(callback.data.split(":")[1])
+    await callback.answer()
+    await _ask_days(callback.message, state, user)
+
+
+@router.callback_query(F.data.startswith("usr_rv:"))
+async def user_revoke_ask(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        return await callback.answer()
+    uid = int(callback.data.split(":")[1])
+    user = await db.find_user(str(uid))
+    await callback.message.edit_text(
+        f"👤 {_who(user)}\n\nPremiumni bekor qilamizmi?",
+        parse_mode="HTML",
+        reply_markup=_kb([[_btn("✅ Ha, bekor qilish", f"prv:{uid}"), _btn("❌ Yo'q", f"usr:{uid}")]]),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "usr_search")
+async def user_search_start(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        return await callback.answer()
+    await state.clear()
+    await state.set_state(UserSearch.query)
+    await callback.message.answer("🔎 Foydalanuvchining Telegram ID'si yoki @username'ini yuboring. Bekor qilish: /cancel")
+    await callback.answer()
+
+
+@router.message(UserSearch.query)
+async def user_search(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    user = await _resolve(message)
+    if not user:
+        return
+    await state.clear()
+    text, kb = await _user_card(user)
+    await message.answer(text, parse_mode="HTML", reply_markup=kb)
 
 
 # ======================================================================
