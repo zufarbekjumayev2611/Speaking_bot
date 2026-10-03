@@ -10,6 +10,7 @@ from aiohttp import web
 
 import db
 from bot import router
+from premium import router as premium_router
 from config import BOT_TOKEN, PORT, WEBAPP_URL
 from web import create_app
 
@@ -30,9 +31,11 @@ async def keep_alive():
 
 async def main():
     await db.init_db()
+    await db.load_admins()
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
+    dp.include_router(premium_router)
 
     runner = web.AppRunner(create_app(bot))
     await runner.setup()

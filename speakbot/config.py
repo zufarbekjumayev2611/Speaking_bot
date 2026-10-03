@@ -46,5 +46,23 @@ DB_PATH = os.getenv("DB_PATH", "speakbot.db")
 PORT = int(os.getenv("PORT", "8080"))
 
 
-def is_admin(user_id: int) -> bool:
+# Premium: bepul foydalanuvchilar kuniga nechta tekshiruv (speaking + writing) olishi mumkin.
+# PREMIUM_ENABLED=0 bo'lsa - hamma uchun cheklovsiz (premium tizimi o'chiriladi).
+PREMIUM_ENABLED = os.getenv("PREMIUM_ENABLED", "1").strip() not in ("0", "false", "no")
+FREE_DAILY_LIMIT = max(0, int(os.getenv("FREE_DAILY_LIMIT", "2")))
+
+# Admin paneldan qo'shilgan adminlar (bazadan yuklanadi). ADMIN_IDS - asosiy adminlar (egalar):
+# ularni panel orqali o'chirib bo'lmaydi.
+EXTRA_ADMIN_IDS: set[int] = set()
+
+
+def is_owner(user_id: int) -> bool:
     return user_id in ADMIN_IDS
+
+
+def is_admin(user_id: int) -> bool:
+    return user_id in ADMIN_IDS or user_id in EXTRA_ADMIN_IDS
+
+
+def all_admin_ids() -> list[int]:
+    return list(dict.fromkeys([*ADMIN_IDS, *sorted(EXTRA_ADMIN_IDS)]))

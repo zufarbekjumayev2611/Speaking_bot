@@ -17,6 +17,8 @@ Telegram bot: ko'p darajali (multilevel) imtihon uchun Speaking va Writing'ni AI
 | `EXAM_LANGUAGE` | yo'q | `tr` (standart) yoki `en` |
 | `GRADER_PROVIDER` | yo'q | `groq` (standart) yoki `claude` (`ANTHROPIC_API_KEY` ham kerak) |
 | `DB_PATH` | disk bilan | `/var/data/speakbot.db` (Disk mount: `/var/data`) |
+| `FREE_DAILY_LIMIT` | yo'q | Bepul foydalanuvchi uchun kuniga tekshiruvlar soni (standart `2`) |
+| `PREMIUM_ENABLED` | yo'q | `0` bo'lsa premium tizimi o'chiq, hamma cheklovsiz (standart `1`) |
 | `WEBAPP_URL` | yo'q | Render `RENDER_EXTERNAL_URL` ni o'zi beradi |
 
 3. **Baza saqlanishi:** SQLite fayl. Render'ning bepul rejasida fayl tizimi vaqtinchalik —
@@ -30,3 +32,11 @@ Bepul rejada servis 15 daqiqa jimlikdan keyin uxlaydi; `main.py` o'zini har 10 d
 ## Lokal ishga tushirish
 
 `speakbot/.env.example` dan `.env` yarating va `speakbot/run_local.sh` ni ishga tushiring (cloudflared kerak).
+
+## Premium va admin panel
+
+- O'quvchi: «💎 Premium» tugmasi — holat, bugungi limit va to'lov ma'lumoti.
+- Bepul foydalanuvchi kuniga `FREE_DAILY_LIMIT` ta tekshiruv oladi (O'zbekiston vaqti bilan kun yangilanadi); premium va adminlar cheklovsiz.
+- To'lov **qo'lda**: admin panel → 💎 Premium → «➕ Premium berish» → ID yoki @username → muddat (30/90/180/365 yoki istalgan kun) → to'lov izohi. Foydalanuvchiga xabar boradi. Faol premiumga qayta berilsa, muddat uzayadi.
+- 👮 Adminlar: `ADMIN_IDS` dagilar asosiy adminlar (o'chirib bo'lmaydi); ular panel orqali yangi admin qo'sha va olib tashlay oladi.
+- 📈 Statistika va to'lov ma'lumoti matnini tahrirlash ham panelda.

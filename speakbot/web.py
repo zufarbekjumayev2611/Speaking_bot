@@ -15,7 +15,8 @@ import grader
 import stt
 import html
 
-from config import ADMIN_IDS, BOT_TOKEN, EXAM_LANGUAGE, GRADER_PROVIDER
+from access import check_access
+from config import BOT_TOKEN, EXAM_LANGUAGE, GRADER_PROVIDER, all_admin_ids
 from languages import LANGUAGES
 from parts import part_info
 
@@ -81,6 +82,9 @@ async def start_exam(request: web.Request):
         return _error(404, "Bu imtihonda hali savol yo'q.")
 
     await db.save_user(user["id"], " ".join(filter(None, [user.get("first_name"), user.get("last_name")])), user.get("username"))
+    allowed, reason = await check_access(user["id"])
+    if not allowed:
+        return _error(403, reason)
     attempt_id = await db.create_attempt(user["id"], exam_id)
     return web.json_response(
         {
@@ -183,7 +187,7 @@ async def finish_exam(request: web.Request):
             return _error(503, "Hozir baholash navbati band. Javoblaringiz saqlandi - "
                                "1-2 daqiqadan keyin «Qayta urinish»ni bosing.")
         if getattr(e, "status", None) in (401, 403):
-            for admin_id in ADMIN_IDS:
+            for admin_id in all_admin_ids():
                 try:
                     await bot.send_message(admin_id, f"⚠️ Baholovchi ({GRADER_PROVIDER}) kaliti ishlamayapti - imtihonlar baholanmayapti.")
                 except Exception:
@@ -198,7 +202,7 @@ async def finish_exam(request: web.Request):
     except Exception:
         log.exception("Natijani o'quvchiga yuborib bo'lmadi")
     name = html.escape(user.get("first_name", "?"))
-    for admin_id in ADMIN_IDS:
+    for admin_id in all_admin_ids():
         try:
             await bot.send_message(
                 admin_id,

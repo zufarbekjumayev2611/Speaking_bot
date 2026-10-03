@@ -27,9 +27,11 @@ from aiogram.types import (
 
 import db
 import grader
-from config import ADMIN_IDS, EXAM_LANGUAGE, WEBAPP_URL, is_admin
+from access import check_access
+from config import EXAM_LANGUAGE, WEBAPP_URL, all_admin_ids, is_admin
 from languages import LANGUAGES
 from parts import SPEAKING_PARTS, WRITING_PARTS, part_info, parts_for
+from premium import BTN_PREMIUM
 
 LANG = LANGUAGES[EXAM_LANGUAGE]
 log = logging.getLogger("bot")
@@ -143,8 +145,10 @@ def _part_from_key(key: str) -> str | None:
 
 def main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     rows = [[KeyboardButton(text=BTN_SPEAKING), KeyboardButton(text=BTN_WRITING)]]
+    bottom = [KeyboardButton(text=BTN_PREMIUM)]
     if is_admin(user_id):
-        rows.append([KeyboardButton(text=BTN_ADMIN)])
+        bottom.append(KeyboardButton(text=BTN_ADMIN))
+    rows.append(bottom)
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
@@ -215,6 +219,9 @@ async def speaking_menu_cb(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("sp:"))
 async def speaking_part(callback: CallbackQuery):
+    allowed, reason = await check_access(callback.from_user.id)
+    if not allowed:
+        return await callback.answer(reason, show_alert=True)
     part = _part_from_key(callback.data.split(":", 1)[1])
     info = part_info("speaking", part)
     exams = await db.list_active_exams("speaking", part)
@@ -278,6 +285,9 @@ async def writing_part(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("wt:"))
 async def writing_topic(callback: CallbackQuery, state: FSMContext):
+    allowed, reason = await check_access(callback.from_user.id)
+    if not allowed:
+        return await callback.answer(reason, show_alert=True)
     exam = await db.get_exam(int(callback.data.split(":")[1]))
     questions = await db.get_questions(exam["id"]) if exam else []
     if not exam or not exam["is_active"] or not questions:
@@ -330,7 +340,7 @@ def _words_note(c: dict, count: int) -> str:
 
 @router.message(WritingAnswer.text, F.text & ~F.text.startswith("/"))
 async def writing_answer(message: Message, state: FSMContext):
-    if message.text in {BTN_SPEAKING, BTN_WRITING, BTN_ADMIN} | OLD_SPEAKING_BUTTONS | OLD_WRITING_BUTTONS:
+    if message.text in {BTN_SPEAKING, BTN_WRITING, BTN_ADMIN, BTN_PREMIUM} | OLD_SPEAKING_BUTTONS | OLD_WRITING_BUTTONS:
         await state.clear()
         return await message.answer(f"{WRITING_NAME} bekor qilindi. Bo'limni qaytadan tanlang.",
                                     reply_markup=main_keyboard(message.from_user.id))
@@ -385,7 +395,7 @@ async def writing_answer(message: Message, state: FSMContext):
         pass
     await message.answer(grader.result_message(exam["title"], info["name"], result), parse_mode="HTML")
 
-    for admin_id in ADMIN_IDS:
+    for admin_id in all_admin_ids():
         try:
             await message.bot.send_message(
                 admin_id,
@@ -426,6 +436,11 @@ async def _admin_panel_view():
         )
     rows.append([InlineKeyboardButton(text="➕ Yangi imtihon / mavzu", callback_data="exam_new")])
     rows.append([InlineKeyboardButton(text="📊 Oxirgi natijalar", callback_data="results")])
+    rows.append([
+        InlineKeyboardButton(text="💎 Premium", callback_data="adm_prem"),
+        InlineKeyboardButton(text="👮 Adminlar", callback_data="adm_admins"),
+        InlineKeyboardButton(text="📈 Statistika", callback_data="adm_stats"),
+    ])
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
 
 

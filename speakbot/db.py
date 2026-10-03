@@ -1,8 +1,10 @@
 """SQLite baza: imtihonlar (speaking/writing), savollar, urinishlar, javoblar, writing ishlari."""
 import json
+from datetime import datetime, timedelta, timezone
 
 import aiosqlite
 
+import config
 from config import DB_PATH
 
 SCHEMA = """
@@ -47,6 +49,29 @@ CREATE TABLE IF NOT EXISTS answers (
     transcript TEXT,
     duration_sec REAL,
     UNIQUE(attempt_id, question_id)
+);
+CREATE TABLE IF NOT EXISTS admins (
+    telegram_id INTEGER PRIMARY KEY,
+    added_by INTEGER,
+    added_at TEXT DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS premium (
+    telegram_id INTEGER PRIMARY KEY,
+    until TEXT NOT NULL,
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS premium_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    days INTEGER,
+    amount TEXT,
+    granted_by INTEGER,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
 );
 CREATE TABLE IF NOT EXISTS writing_submissions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -272,4 +297,138 @@ async def recent_results(limit: int = 20):
                WHERE w.status = 'done'
            ) ORDER BY created_at DESC, id DESC LIMIT ?""",
         (limit,),
+    )
+
+
+# ---------- Adminlar ----------
+
+async def load_admins():
+    """Bazadagi adminlarni xotiraga yuklaydi (config.is_admin ularni ko'radi)."""
+    rows = await _fetchall("SELECT telegram_id FROM admins")
+    config.EXTRA_ADMIN_IDS = {r["telegram_id"] for r in rows}
+
+
+async def list_admins():
+    return await _fetchall(
+        """SELECT a.telegram_id, a.added_at, u.full_name, u.username FROM admins a
+           LEFT JOIN users u ON u.telegram_id = a.telegram_id ORDER BY a.added_at"""
+    )
+
+
+async def add_admin(telegram_id: int, added_by: int):
+    await _execute("INSERT OR IGNORE INTO admins (telegram_id, added_by) VALUES (?, ?)", (telegram_id, added_by))
+    await load_admins()
+
+
+async def remove_admin(telegram_id: int):
+    await _execute("DELETE FROM admins WHERE telegram_id = ?", (telegram_id,))
+    await load_admins()
+
+
+async def find_user(query: str):
+    """Telegram ID (raqam) yoki @username bo'yicha foydalanuvchini topadi."""
+    q = (query or "").strip()
+    if q.lstrip("-").isdigit():
+        return await get_user(int(q)) or {"telegram_id": int(q), "full_name": None, "username": None}
+    q = q.lstrip("@")
+    if not q:
+        return None
+    return await _fetchone("SELECT * FROM users WHERE LOWER(username) = LOWER(?)", (q,))
+
+
+# ---------- Premium ----------
+
+_FMT = "%Y-%m-%d %H:%M:%S"
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+async def get_premium_until(telegram_id: int) -> str | None:
+    """Premium hali tugamagan bo'lsa - tugash vaqti (UTC, matn), aks holda None."""
+    row = await _fetchone("SELECT until FROM premium WHERE telegram_id = ?", (telegram_id,))
+    if row and row["until"] > _now().strftime(_FMT):
+        return row["until"]
+    return None
+
+
+async def grant_premium(telegram_id: int, days: int, amount: str, granted_by: int) -> str:
+    """Premiumni `days` kunga uzaytiradi (faol bo'lsa - tugash sanasiga qo'shiladi). Yangi tugash vaqtini qaytaradi."""
+    current = await get_premium_until(telegram_id)
+    base = datetime.strptime(current, _FMT) if current else _now()
+    until = (base + timedelta(days=days)).strftime(_FMT)
+    await _execute(
+        """INSERT INTO premium (telegram_id, until) VALUES (?, ?)
+           ON CONFLICT(telegram_id) DO UPDATE SET until = excluded.until, updated_at = datetime('now')""",
+        (telegram_id, until),
+    )
+    await _execute(
+        "INSERT INTO premium_log (telegram_id, action, days, amount, granted_by) VALUES (?, 'grant', ?, ?, ?)",
+        (telegram_id, days, amount, granted_by),
+    )
+    return until
+
+
+async def revoke_premium(telegram_id: int, revoked_by: int):
+    await _execute("DELETE FROM premium WHERE telegram_id = ?", (telegram_id,))
+    await _execute(
+        "INSERT INTO premium_log (telegram_id, action, granted_by) VALUES (?, 'revoke', ?)", (telegram_id, revoked_by)
+    )
+
+
+async def list_active_premium(limit: int = 15):
+    return await _fetchall(
+        """SELECT p.telegram_id, p.until, u.full_name, u.username FROM premium p
+           LEFT JOIN users u ON u.telegram_id = p.telegram_id
+           WHERE p.until > ? ORDER BY p.until LIMIT ?""",
+        (_now().strftime(_FMT), limit),
+    )
+
+
+async def count_active_premium() -> int:
+    row = await _fetchone("SELECT COUNT(*) AS c FROM premium WHERE until > ?", (_now().strftime(_FMT),))
+    return row["c"]
+
+
+async def count_checks_today(telegram_id: int) -> int:
+    """Bugun (O'zbekiston vaqti, UTC+5) yakunlangan speaking + writing tekshiruvlari soni."""
+    row = await _fetchone(
+        """SELECT
+             (SELECT COUNT(*) FROM attempts WHERE telegram_id = ?1 AND status = 'done'
+                AND date(created_at, '+5 hours') = date('now', '+5 hours'))
+           + (SELECT COUNT(*) FROM writing_submissions WHERE telegram_id = ?1 AND status = 'done'
+                AND date(created_at, '+5 hours') = date('now', '+5 hours')) AS c""",
+        (telegram_id,),
+    )
+    return row["c"]
+
+
+async def get_stats() -> dict:
+    row = await _fetchone(
+        """SELECT
+             (SELECT COUNT(*) FROM users) AS users,
+             (SELECT COUNT(*) FROM users WHERE date(joined_at, '+5 hours') = date('now', '+5 hours')) AS new_today,
+             (SELECT COUNT(*) FROM attempts WHERE status = 'done') AS speaking,
+             (SELECT COUNT(*) FROM writing_submissions WHERE status = 'done') AS writing,
+             (SELECT COUNT(*) FROM attempts WHERE status = 'done'
+                AND date(created_at, '+5 hours') = date('now', '+5 hours'))
+           + (SELECT COUNT(*) FROM writing_submissions WHERE status = 'done'
+                AND date(created_at, '+5 hours') = date('now', '+5 hours')) AS today"""
+    )
+    row["premium"] = await count_active_premium()
+    return row
+
+
+# ---------- Sozlamalar ----------
+
+async def get_setting(key: str, default: str = "") -> str:
+    row = await _fetchone("SELECT value FROM settings WHERE key = ?", (key,))
+    return row["value"] if row and row["value"] else default
+
+
+async def set_setting(key: str, value: str):
+    await _execute(
+        "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value),
     )
