@@ -12,7 +12,10 @@ def _required(name: str) -> str:
 
 BOT_TOKEN = _required("BOT_TOKEN")
 GROQ_API_KEY = _required("GROQ_API_KEY")  # ovozni matnga aylantirish uchun doim kerak
-WEBAPP_URL = _required("WEBAPP_URL").rstrip("/")
+# Render o'zi RENDER_EXTERNAL_URL beradi (https://<nom>.onrender.com) - alohida yozish shart emas.
+WEBAPP_URL = (os.getenv("WEBAPP_URL", "").strip() or os.getenv("RENDER_EXTERNAL_URL", "").strip()).rstrip("/")
+if not WEBAPP_URL:
+    raise RuntimeError("WEBAPP_URL muhit o'zgaruvchisi topilmadi.")
 
 # Adminlar: vergul bilan ajratilgan Telegram ID'lar, masalan "111111111,222222222"
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").replace(" ", "").split(",") if x]
@@ -43,5 +46,23 @@ DB_PATH = os.getenv("DB_PATH", "speakbot.db")
 PORT = int(os.getenv("PORT", "8080"))
 
 
-def is_admin(user_id: int) -> bool:
+# Premium: bepul foydalanuvchilar kuniga nechta tekshiruv (speaking + writing) olishi mumkin.
+# PREMIUM_ENABLED=0 bo'lsa - hamma uchun cheklovsiz (premium tizimi o'chiriladi).
+PREMIUM_ENABLED = os.getenv("PREMIUM_ENABLED", "1").strip() not in ("0", "false", "no")
+FREE_DAILY_LIMIT = max(0, int(os.getenv("FREE_DAILY_LIMIT", "2")))
+
+# Admin paneldan qo'shilgan adminlar (bazadan yuklanadi). ADMIN_IDS - asosiy adminlar (egalar):
+# ularni panel orqali o'chirib bo'lmaydi.
+EXTRA_ADMIN_IDS: set[int] = set()
+
+
+def is_owner(user_id: int) -> bool:
     return user_id in ADMIN_IDS
+
+
+def is_admin(user_id: int) -> bool:
+    return user_id in ADMIN_IDS or user_id in EXTRA_ADMIN_IDS
+
+
+def all_admin_ids() -> list[int]:
+    return list(dict.fromkeys([*ADMIN_IDS, *sorted(EXTRA_ADMIN_IDS)]))

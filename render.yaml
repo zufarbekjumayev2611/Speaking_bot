@@ -1,0 +1,29 @@
+# Render Blueprint: Dashboard -> New -> Blueprint -> shu repo.
+services:
+  - type: web
+    name: speakbot
+    runtime: python
+    rootDir: speakbot
+    plan: starter            # disk (baza saqlanishi) uchun pullik reja kerak; bepul reja uchun pastga qarang
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    healthCheckPath: /health
+    disk:
+      name: speakbot-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: DB_PATH
+        value: /var/data/speakbot.db
+      - key: EXAM_LANGUAGE
+        value: tr
+      - key: GRADER_PROVIDER
+        value: groq
+      - key: BOT_TOKEN
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: ADMIN_IDS
+        sync: false
