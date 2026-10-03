@@ -3,6 +3,7 @@ import aiohttp
 
 from config import EXAM_LANGUAGE, GROQ_API_KEY, STT_MODEL
 from languages import LANGUAGES
+from netclient import get_session
 
 LANG = LANGUAGES[EXAM_LANGUAGE]
 
@@ -30,14 +31,13 @@ async def transcribe(audio: bytes, mime: str) -> str:
     # Whisper to'xtalishlarni (um, ııı...) o'chirib tashlamasligi uchun namuna - ravonlikni baholashga kerak.
     form.add_field("prompt", LANG["whisper_prompt"])
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            GROQ_URL,
-            data=form,
-            headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
-            timeout=aiohttp.ClientTimeout(total=60),
-        ) as resp:
-            body = await resp.json(content_type=None)
-            if resp.status != 200:
-                raise RuntimeError(f"Groq xatosi {resp.status}: {body}")
-            return (body.get("text") or "").strip()
+    async with get_session().post(
+        GROQ_URL,
+        data=form,
+        headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+        timeout=aiohttp.ClientTimeout(total=60),
+    ) as resp:
+        body = await resp.json(content_type=None)
+        if resp.status != 200:
+            raise RuntimeError(f"Groq xatosi {resp.status}: {body}")
+        return (body.get("text") or "").strip()

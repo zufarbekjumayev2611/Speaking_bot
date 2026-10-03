@@ -22,6 +22,7 @@ from config import (
     RATERS,
 )
 from languages import LANGUAGES
+from netclient import get_session
 from parts import part_info
 from scoring import MAX_SCORE, level_for, standard_score
 
@@ -152,17 +153,16 @@ async def _ask_groq(system: str, user: str, json_mode: bool) -> str:
         payload["response_format"] = {"type": "json_object"}
     if "gpt-oss" in GRADER_MODEL:
         payload["reasoning_effort"] = "low"
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            GROQ_CHAT_URL,
-            json=payload,
-            headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
-            timeout=aiohttp.ClientTimeout(total=90),
-        ) as resp:
-            body = await resp.json(content_type=None)
-            if resp.status != 200:
-                raise GraderError(resp.status, str(body)[:500])
-            return body["choices"][0]["message"]["content"] or ""
+    async with get_session().post(
+        GROQ_CHAT_URL,
+        json=payload,
+        headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+        timeout=aiohttp.ClientTimeout(total=90),
+    ) as resp:
+        body = await resp.json(content_type=None)
+        if resp.status != 200:
+            raise GraderError(resp.status, str(body)[:500])
+        return body["choices"][0]["message"]["content"] or ""
 
 
 async def _ask_claude(system: str, user: str) -> str:
@@ -173,21 +173,20 @@ async def _ask_claude(system: str, user: str) -> str:
         "system": system,
         "messages": [{"role": "user", "content": user}],
     }
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            CLAUDE_URL,
-            json=payload,
-            headers={
-                "x-api-key": ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            timeout=aiohttp.ClientTimeout(total=90),
-        ) as resp:
-            body = await resp.json(content_type=None)
-            if resp.status != 200:
-                raise GraderError(resp.status, str(body)[:500])
-            return "".join(b.get("text", "") for b in body.get("content", []) if b.get("type") == "text")
+    async with get_session().post(
+        CLAUDE_URL,
+        json=payload,
+        headers={
+            "x-api-key": ANTHROPIC_API_KEY,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        },
+        timeout=aiohttp.ClientTimeout(total=90),
+    ) as resp:
+        body = await resp.json(content_type=None)
+        if resp.status != 200:
+            raise GraderError(resp.status, str(body)[:500])
+        return "".join(b.get("text", "") for b in body.get("content", []) if b.get("type") == "text")
 
 
 async def _ask(system: str, user: str) -> str:
@@ -243,11 +242,11 @@ def _clean_mistakes(mistakes: list, source: str) -> list:
     return clean[:5]
 
 
-async def _grade_component(kind: str, system: str, user: str, max_band: int) -> dict:
-    """RATERS ta mustaqil baholash; ekspertlar ballarining o'rtachasi (0.5 aniqlikda)."""
+async def _grade_component(kind: str, system: str, user: str, max_band: int, raters: int | None = None) -> dict:
+    """`raters` (standart RATERS) ta mustaqil baholash; ekspertlar ballarining o'rtachasi (0.5 aniqlikda)."""
     note_keys = list(notes_for(kind))
     outcomes = await asyncio.gather(
-        *[_grade_once(system, user, max_band, note_keys) for _ in range(RATERS)], return_exceptions=True
+        *[_grade_once(system, user, max_band, note_keys) for _ in range(raters or RATERS)], return_exceptions=True
     )
     ok = [o for o in outcomes if isinstance(o, dict)]
     if not ok:
@@ -314,7 +313,7 @@ def _metrics(transcript: str, duration, allotted) -> str:
     return "O'lchovlar: " + ", ".join(info)
 
 
-async def grade_speaking(answers: list[dict], part: str | None) -> dict:
+async def grade_speaking(answers: list[dict], part: str | None, raters: int | None = None) -> dict:
     """answers: [{"position", "question", "transcript", "duration_sec", "answer_sec", "has_photo"}]"""
     p = part_info("speaking", part)
     blocks = []
@@ -326,14 +325,14 @@ async def grade_speaking(answers: list[dict], part: str | None) -> dict:
             f"{_metrics(transcript, a.get('duration_sec'), a.get('answer_sec'))}\n"
             f"O'quvchi nutqi (transkripsiya): {transcript or '(hech narsa eshitilmadi)'}"
         )
-    comp = await _grade_component("speaking", speaking_prompt(part), "\n\n".join(blocks), p["max"])
+    comp = await _grade_component("speaking", speaking_prompt(part), "\n\n".join(blocks), p["max"], raters)
     comp.update(name=p["name"], max=p["max"], label=_label(p["labels"], comp["band"]))
     return _combine("speaking", part, p["name"], [comp])
 
 
 # ---------------------------------------------------------------- writing
 
-async def grade_writing(task_text: str, texts: dict, part: str | None) -> dict:
+async def grade_writing(task_text: str, texts: dict, part: str | None, raters: int | None = None) -> dict:
     """texts: {"email1": "...", "email2": "..."} (1-qism) yoki {"essay": "..."} (2-qism)."""
     p = part_info("writing", part)
     comps = p["components"]
@@ -342,7 +341,7 @@ async def grade_writing(task_text: str, texts: dict, part: str | None) -> dict:
         answer = (texts.get(c["key"]) or "").strip()
         words = len(answer.split())
         user = f"TOPSHIRIQ:\n{task_text}\n\nO'QUVCHI MATNI - {c['name']} ({words} so'z):\n{answer or '(javob yozilmagan)'}"
-        res = await _grade_component("writing", writing_prompt(c), user, c["max"])
+        res = await _grade_component("writing", writing_prompt(c), user, c["max"], raters)
         res.update(name=c["name"], max=c["max"], words=words, label=_label(c["labels"], res["band"]))
         return res
 
