@@ -15,7 +15,8 @@ import grader
 import stt
 import html
 
-from access import check_access
+import plans
+from access import check_access, get_plan
 from config import BOT_TOKEN, EXAM_LANGUAGE, GRADER_PROVIDER, all_admin_ids
 from languages import LANGUAGES
 from parts import part_info
@@ -179,7 +180,7 @@ async def finish_exam(request: web.Request):
     exam = await db.get_exam(attempt["exam_id"])
     part = exam.get("part") if exam else None
     try:
-        result = await grader.grade_speaking(answers, part)
+        result = await grader.grade_speaking(answers, part, plans.raters_for(await get_plan(user["id"])))
     except Exception as e:
         log.exception("Baholash xatosi (attempt %s)", attempt["id"])
         if getattr(e, "status", None) == 429:

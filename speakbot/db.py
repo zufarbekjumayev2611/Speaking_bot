@@ -1,5 +1,6 @@
 """SQLite baza: imtihonlar (speaking/writing), savollar, urinishlar, javoblar, writing ishlari."""
 import json
+import os
 from datetime import datetime, timedelta, timezone
 
 import aiosqlite
@@ -58,12 +59,15 @@ CREATE TABLE IF NOT EXISTS admins (
 CREATE TABLE IF NOT EXISTS premium (
     telegram_id INTEGER PRIMARY KEY,
     until TEXT NOT NULL,
+    plan TEXT DEFAULT 'pro',
+    reminded_for TEXT,
     updated_at TEXT DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS premium_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     telegram_id INTEGER NOT NULL,
     action TEXT NOT NULL,
+    plan TEXT,
     days INTEGER,
     amount TEXT,
     granted_by INTEGER,
@@ -94,31 +98,72 @@ _MIGRATIONS = [
     "ALTER TABLE exams ADD COLUMN kind TEXT DEFAULT 'speaking'",
     "ALTER TABLE exams ADD COLUMN part TEXT",
     "ALTER TABLE attempts ADD COLUMN raw_score REAL",
+    "ALTER TABLE premium ADD COLUMN plan TEXT DEFAULT 'pro'",
+    "ALTER TABLE premium ADD COLUMN reminded_for TEXT",
+    "ALTER TABLE premium_log ADD COLUMN plan TEXT",
+    "ALTER TABLE users ADD COLUMN blocked INTEGER DEFAULT 0",
 ]
 
 
-def _conn():
-    return aiosqlite.connect(DB_PATH)
+_db: aiosqlite.Connection | None = None
+_settings: dict[str, str] = {}
+
+_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS ix_questions_exam ON questions(exam_id, position)",
+    "CREATE INDEX IF NOT EXISTS ix_exams_active ON exams(is_active, kind, part)",
+    "CREATE INDEX IF NOT EXISTS ix_attempts_user ON attempts(telegram_id, status, created_at)",
+    "CREATE INDEX IF NOT EXISTS ix_attempts_status ON attempts(status, created_at)",
+    "CREATE INDEX IF NOT EXISTS ix_answers_attempt ON answers(attempt_id)",
+    "CREATE INDEX IF NOT EXISTS ix_writing_user ON writing_submissions(telegram_id, status, created_at)",
+    "CREATE INDEX IF NOT EXISTS ix_writing_status ON writing_submissions(status, created_at)",
+    "CREATE INDEX IF NOT EXISTS ix_premium_until ON premium(until)",
+    "CREATE INDEX IF NOT EXISTS ix_users_joined ON users(joined_at)",
+    "CREATE INDEX IF NOT EXISTS ix_log_user ON premium_log(telegram_id, created_at)",
+]
+
+
+async def _get() -> aiosqlite.Connection:
+    """Bitta doimiy ulanish (har so'rovda yangisini ochish juda sekin edi) + WAL rejimi."""
+    global _db
+    if _db is None:
+        parent = os.path.dirname(os.path.abspath(DB_PATH))
+        os.makedirs(parent, exist_ok=True)
+        _db = await aiosqlite.connect(DB_PATH)
+        _db.row_factory = aiosqlite.Row
+        await _db.execute("PRAGMA journal_mode=WAL")
+        await _db.execute("PRAGMA synchronous=NORMAL")
+        await _db.execute("PRAGMA busy_timeout=5000")
+        await _db.execute("PRAGMA temp_store=MEMORY")
+    return _db
+
+
+async def close_db():
+    global _db
+    if _db is not None:
+        await _db.close()
+        _db = None
 
 
 async def init_db():
-    async with _conn() as db:
-        await db.executescript(SCHEMA)
-        for sql in _MIGRATIONS:
-            try:
-                await db.execute(sql)
-            except aiosqlite.OperationalError:
-                pass
-        # Yangi format: writing'da 1.1 va 1.2 alohida emas - ikkalasi "1-qism"
-        await db.execute("UPDATE exams SET part = '1' WHERE kind = 'writing' AND part IN ('1.1', '1.2')")
-        await db.commit()
+    db = await _get()
+    await db.executescript(SCHEMA)
+    for sql in _MIGRATIONS:
+        try:
+            await db.execute(sql)
+        except aiosqlite.OperationalError:
+            pass
+    # Yangi format: writing'da 1.1 va 1.2 alohida emas - ikkalasi "1-qism"
+    await db.execute("UPDATE exams SET part = '1' WHERE kind = 'writing' AND part IN ('1.1', '1.2')")
+    for sql in _INDEXES:
+        await db.execute(sql)
+    await db.commit()
+    await load_settings()
 
 
 async def _fetchall(sql, params=()):
-    async with _conn() as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute(sql, params) as cur:
-            return [dict(r) for r in await cur.fetchall()]
+    db = await _get()
+    async with db.execute(sql, params) as cur:
+        return [dict(r) for r in await cur.fetchall()]
 
 
 async def _fetchone(sql, params=()):
@@ -127,10 +172,10 @@ async def _fetchone(sql, params=()):
 
 
 async def _execute(sql, params=()) -> int:
-    async with _conn() as db:
-        cur = await db.execute(sql, params)
-        await db.commit()
-        return cur.lastrowid
+    db = await _get()
+    cur = await db.execute(sql, params)
+    await db.commit()
+    return cur.lastrowid
 
 
 # ---------- Foydalanuvchilar ----------
@@ -281,7 +326,7 @@ async def finish_writing_submission(submission_id: int, score: int, level: str, 
 
 # ---------- Natijalar (admin uchun) ----------
 
-async def recent_results(limit: int = 20):
+async def recent_results(limit: int = 20, offset: int = 0):
     return await _fetchall(
         """SELECT * FROM (
                SELECT 'speaking' AS kind, a.id, a.score, a.level, a.result_json, a.created_at, u.full_name, e.title, e.part
@@ -295,8 +340,8 @@ async def recent_results(limit: int = 20):
                LEFT JOIN users u ON u.telegram_id = w.telegram_id
                LEFT JOIN exams e ON e.id = w.exam_id
                WHERE w.status = 'done'
-           ) ORDER BY created_at DESC, id DESC LIMIT ?""",
-        (limit,),
+           ) ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?""",
+        (limit, offset),
     )
 
 
@@ -345,27 +390,34 @@ def _now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-async def get_premium_until(telegram_id: int) -> str | None:
-    """Premium hali tugamagan bo'lsa - tugash vaqti (UTC, matn), aks holda None."""
-    row = await _fetchone("SELECT until FROM premium WHERE telegram_id = ?", (telegram_id,))
+async def get_premium(telegram_id: int) -> dict | None:
+    """Faol premium: {"until": ..., "plan": "standard" | "pro"} yoki None (tugagan / yo'q)."""
+    row = await _fetchone("SELECT until, plan FROM premium WHERE telegram_id = ?", (telegram_id,))
     if row and row["until"] > _now().strftime(_FMT):
-        return row["until"]
+        return {"until": row["until"], "plan": row["plan"] or "pro"}
     return None
 
 
-async def grant_premium(telegram_id: int, days: int, amount: str, granted_by: int) -> str:
-    """Premiumni `days` kunga uzaytiradi (faol bo'lsa - tugash sanasiga qo'shiladi). Yangi tugash vaqtini qaytaradi."""
+async def get_premium_until(telegram_id: int) -> str | None:
+    p = await get_premium(telegram_id)
+    return p["until"] if p else None
+
+
+async def grant_premium(telegram_id: int, days: int, amount: str, granted_by: int, plan: str = "pro") -> str:
+    """Premiumni `days` kunga uzaytiradi (faol bo'lsa - tugash sanasiga qo'shiladi), tarifni `plan` ga o'rnatadi.
+    Yangi tugash vaqtini qaytaradi."""
     current = await get_premium_until(telegram_id)
     base = datetime.strptime(current, _FMT) if current else _now()
     until = (base + timedelta(days=days)).strftime(_FMT)
     await _execute(
-        """INSERT INTO premium (telegram_id, until) VALUES (?, ?)
-           ON CONFLICT(telegram_id) DO UPDATE SET until = excluded.until, updated_at = datetime('now')""",
-        (telegram_id, until),
+        """INSERT INTO premium (telegram_id, until, plan, reminded_for) VALUES (?, ?, ?, NULL)
+           ON CONFLICT(telegram_id) DO UPDATE SET until = excluded.until, plan = excluded.plan,
+               reminded_for = NULL, updated_at = datetime('now')""",
+        (telegram_id, until, plan),
     )
     await _execute(
-        "INSERT INTO premium_log (telegram_id, action, days, amount, granted_by) VALUES (?, 'grant', ?, ?, ?)",
-        (telegram_id, days, amount, granted_by),
+        "INSERT INTO premium_log (telegram_id, action, plan, days, amount, granted_by) VALUES (?, 'grant', ?, ?, ?, ?)",
+        (telegram_id, plan, days, amount, granted_by),
     )
     return until
 
@@ -377,18 +429,57 @@ async def revoke_premium(telegram_id: int, revoked_by: int):
     )
 
 
-async def list_active_premium(limit: int = 15):
+async def list_active_premium(limit: int = 15, plan: str | None = None):
+    sql = """SELECT p.telegram_id, p.until, p.plan, u.full_name, u.username FROM premium p
+             LEFT JOIN users u ON u.telegram_id = p.telegram_id
+             WHERE p.until > ?"""
+    params: list = [_now().strftime(_FMT)]
+    if plan:
+        sql += " AND p.plan = ?"
+        params.append(plan)
+    sql += " ORDER BY p.until LIMIT ?"
+    params.append(limit)
+    return await _fetchall(sql, tuple(params))
+
+
+async def list_expiring_premium(days: int = 7, limit: int = 15):
+    """Yaqin kunlarda tugaydigan faol obunalar."""
+    now = _now()
     return await _fetchall(
-        """SELECT p.telegram_id, p.until, u.full_name, u.username FROM premium p
+        """SELECT p.telegram_id, p.until, p.plan, u.full_name, u.username FROM premium p
            LEFT JOIN users u ON u.telegram_id = p.telegram_id
-           WHERE p.until > ? ORDER BY p.until LIMIT ?""",
-        (_now().strftime(_FMT), limit),
+           WHERE p.until > ? AND p.until <= ? ORDER BY p.until LIMIT ?""",
+        (now.strftime(_FMT), (now + timedelta(days=days)).strftime(_FMT), limit),
     )
 
 
-async def count_active_premium() -> int:
-    row = await _fetchone("SELECT COUNT(*) AS c FROM premium WHERE until > ?", (_now().strftime(_FMT),))
-    return row["c"]
+async def due_reminders(days: int = 3):
+    """Tugashiga `days` kun qolgan va hali eslatma yuborilmagan obunalar."""
+    now = _now()
+    return await _fetchall(
+        """SELECT telegram_id, until, plan FROM premium
+           WHERE until > ? AND until <= ? AND COALESCE(reminded_for, '') != until""",
+        (now.strftime(_FMT), (now + timedelta(days=days)).strftime(_FMT)),
+    )
+
+
+async def mark_reminded(telegram_id: int, until: str):
+    await _execute("UPDATE premium SET reminded_for = ? WHERE telegram_id = ?", (until, telegram_id))
+
+
+async def count_active_premium(plan: str | None = None) -> int:
+    sql, params = "SELECT COUNT(*) AS c FROM premium WHERE until > ?", [_now().strftime(_FMT)]
+    if plan:
+        sql += " AND plan = ?"
+        params.append(plan)
+    return (await _fetchone(sql, tuple(params)))["c"]
+
+
+async def premium_history(telegram_id: int, limit: int = 5):
+    return await _fetchall(
+        "SELECT action, plan, days, amount, created_at FROM premium_log WHERE telegram_id = ? ORDER BY id DESC LIMIT ?",
+        (telegram_id, limit),
+    )
 
 
 async def count_checks_month(telegram_id: int) -> int:
@@ -409,22 +500,44 @@ async def get_stats() -> dict:
         """SELECT
              (SELECT COUNT(*) FROM users) AS users,
              (SELECT COUNT(*) FROM users WHERE date(joined_at, '+5 hours') = date('now', '+5 hours')) AS new_today,
+             (SELECT COUNT(*) FROM users WHERE joined_at >= datetime('now', '-7 days')) AS new_week,
+             (SELECT COUNT(*) FROM users WHERE COALESCE(blocked, 0) = 1) AS blocked,
              (SELECT COUNT(*) FROM attempts WHERE status = 'done') AS speaking,
              (SELECT COUNT(*) FROM writing_submissions WHERE status = 'done') AS writing,
              (SELECT COUNT(*) FROM attempts WHERE status = 'done'
                 AND date(created_at, '+5 hours') = date('now', '+5 hours'))
            + (SELECT COUNT(*) FROM writing_submissions WHERE status = 'done'
-                AND date(created_at, '+5 hours') = date('now', '+5 hours')) AS today"""
+                AND date(created_at, '+5 hours') = date('now', '+5 hours')) AS today,
+             (SELECT COUNT(*) FROM attempts WHERE status = 'done' AND created_at >= datetime('now', '-7 days'))
+           + (SELECT COUNT(*) FROM writing_submissions WHERE status = 'done' AND created_at >= datetime('now', '-7 days')) AS week,
+             (SELECT COUNT(*) FROM attempts WHERE status = 'done' AND created_at >= datetime('now', '-30 days'))
+           + (SELECT COUNT(*) FROM writing_submissions WHERE status = 'done' AND created_at >= datetime('now', '-30 days')) AS month,
+             (SELECT COUNT(DISTINCT telegram_id) FROM (
+                 SELECT telegram_id FROM attempts WHERE status = 'done' AND created_at >= datetime('now', '-7 days')
+                 UNION SELECT telegram_id FROM writing_submissions WHERE status = 'done' AND created_at >= datetime('now', '-7 days'))) AS active_week,
+             (SELECT COUNT(*) FROM premium_log WHERE action = 'grant' AND created_at >= datetime('now', '-30 days')) AS grants_month"""
     )
-    row["premium"] = await count_active_premium()
+    row["standard"] = await count_active_premium("standard")
+    row["pro"] = await count_active_premium("pro")
+    row["premium"] = row["standard"] + row["pro"]
     return row
 
 
-# ---------- Sozlamalar ----------
+# ---------- Sozlamalar (xotirada keshlanadi - har safar bazaga bormaydi) ----------
+
+async def load_settings():
+    global _settings
+    rows = await _fetchall("SELECT key, value FROM settings")
+    _settings = {r["key"]: r["value"] or "" for r in rows}
+
+
+def setting(key: str, default: str = "") -> str:
+    """Keshdan sinxron o'qish (init_db / set_setting keshni yangilab turadi)."""
+    return _settings.get(key) or default
+
 
 async def get_setting(key: str, default: str = "") -> str:
-    row = await _fetchone("SELECT value FROM settings WHERE key = ?", (key,))
-    return row["value"] if row and row["value"] else default
+    return setting(key, default)
 
 
 async def set_setting(key: str, value: str):
@@ -432,6 +545,68 @@ async def set_setting(key: str, value: str):
         "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         (key, value),
     )
+    _settings[key] = value
+
+
+# ---------- Bloklangan foydalanuvchilar ----------
+
+async def load_blocked():
+    rows = await _fetchall("SELECT telegram_id FROM users WHERE COALESCE(blocked, 0) = 1")
+    config.BLOCKED_IDS = {r["telegram_id"] for r in rows}
+
+
+async def set_blocked(telegram_id: int, blocked: bool):
+    await _execute("UPDATE users SET blocked = ? WHERE telegram_id = ?", (int(blocked), telegram_id))
+    await load_blocked()
+
+
+# ---------- Ommaviy xabar uchun auditoriya ----------
+
+async def broadcast_ids(audience: str) -> list[int]:
+    """audience: all | free | standard | pro | premium"""
+    now = _now().strftime(_FMT)
+    base = "SELECT u.telegram_id FROM users u LEFT JOIN premium p ON p.telegram_id = u.telegram_id AND p.until > ? WHERE COALESCE(u.blocked, 0) = 0"
+    cond = {
+        "all": "",
+        "free": " AND p.telegram_id IS NULL",
+        "standard": " AND p.plan = 'standard'",
+        "pro": " AND p.plan = 'pro'",
+        "premium": " AND p.telegram_id IS NOT NULL",
+    }[audience]
+    return [r["telegram_id"] for r in await _fetchall(base + cond, (now,))]
+
+
+# ---------- Foydalanuvchi natijalari ----------
+
+async def user_results(telegram_id: int, limit: int = 5):
+    return await _fetchall(
+        """SELECT * FROM (
+               SELECT 'speaking' AS kind, a.score, a.raw_score, a.level, a.created_at, e.title
+               FROM attempts a LEFT JOIN exams e ON e.id = a.exam_id
+               WHERE a.telegram_id = ?1 AND a.status = 'done'
+               UNION ALL
+               SELECT 'writing' AS kind, w.score, w.raw_score, w.level, w.created_at, e.title
+               FROM writing_submissions w LEFT JOIN exams e ON e.id = w.exam_id
+               WHERE w.telegram_id = ?1 AND w.status = 'done'
+           ) ORDER BY created_at DESC LIMIT ?2""",
+        (telegram_id, limit),
+    )
+
+
+# ---------- Imtihonni qayta nomlash / nusxalash ----------
+
+async def rename_exam(exam_id: int, title: str):
+    await _execute("UPDATE exams SET title = ? WHERE id = ?", (title, exam_id))
+
+
+async def duplicate_exam(exam_id: int) -> int | None:
+    exam = await get_exam(exam_id)
+    if not exam:
+        return None
+    new_id = await create_exam(f"{exam['title']} (nusxa)"[:100], exam.get("kind") or "speaking", exam.get("part"))
+    for q in await get_questions(exam_id):
+        await add_question(new_id, q["text"], q["photo_file_id"], q["prep_sec"], q["answer_sec"])
+    return new_id
 
 
 # ---------- Foydalanuvchilar ro'yxati (admin uchun) ----------
@@ -444,7 +619,7 @@ async def list_users(offset: int = 0, limit: int = 8):
     """Eng yangi qo'shilganlar birinchi; premium holati bilan."""
     return await _fetchall(
         """SELECT u.telegram_id, u.full_name, u.username, u.joined_at,
-                  (p.until IS NOT NULL AND p.until > ?) AS is_premium
+                  (p.until IS NOT NULL AND p.until > ?) AS is_premium, p.plan AS plan, COALESCE(u.blocked, 0) AS blocked
            FROM users u LEFT JOIN premium p ON p.telegram_id = u.telegram_id
            ORDER BY u.joined_at DESC, u.telegram_id DESC LIMIT ? OFFSET ?""",
         (_now().strftime(_FMT), limit, offset),

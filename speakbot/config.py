@@ -50,6 +50,11 @@ PORT = int(os.getenv("PORT", "8080"))
 # PREMIUM_ENABLED=0 bo'lsa - hamma uchun cheklovsiz (premium tizimi o'chiriladi).
 PREMIUM_ENABLED = os.getenv("PREMIUM_ENABLED", "1").strip() not in ("0", "false", "no")
 FREE_MONTHLY_LIMIT = max(0, int(os.getenv("FREE_MONTHLY_LIMIT", "5")))
+STANDARD_MONTHLY_LIMIT = max(0, int(os.getenv("STANDARD_MONTHLY_LIMIT", "30")))  # Standard tarif: oyiga
+# Pro tarif - cheksiz (admin paneldagi «Sozlamalar»dan har bir tarif limitini o'zgartirish mumkin)
+
+# Bloklangan foydalanuvchilar (bazadan yuklanadi): bot ularga javob bermaydi.
+BLOCKED_IDS: set[int] = set()
 
 # Admin paneldan qo'shilgan adminlar (bazadan yuklanadi). ADMIN_IDS - asosiy adminlar (egalar):
 # ularni panel orqali o'chirib bo'lmaydi.

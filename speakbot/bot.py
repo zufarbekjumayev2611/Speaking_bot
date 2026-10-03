@@ -27,7 +27,8 @@ from aiogram.types import (
 
 import db
 import grader
-from access import check_access
+import plans
+from access import check_access, get_plan
 from config import EXAM_LANGUAGE, WEBAPP_URL, all_admin_ids, is_admin
 from languages import LANGUAGES
 from parts import SPEAKING_PARTS, WRITING_PARTS, part_info, parts_for
@@ -378,7 +379,9 @@ async def writing_answer(message: Message, state: FSMContext):
     wait = await message.answer(f"✅ Qabul qilindi. {note}\n⏳ Ishingiz rasmiy mezonlar bo'yicha tekshirilmoqda... (10–40 soniya)")
 
     try:
-        result = await grader.grade_writing(questions[0]["text"], texts, exam["part"])
+        result = await grader.grade_writing(
+            questions[0]["text"], texts, exam["part"], plans.raters_for(await get_plan(message.from_user.id))
+        )
     except Exception as err:
         log.exception("Writing baholash xatosi (submission %s)", submission_id)
         if getattr(err, "status", None) == 429:
@@ -421,8 +424,29 @@ def _admin_only(user_id: int) -> bool:
 
 
 async def _admin_panel_view():
+    """Admin bosh sahifasi: qisqa ko'rsatkichlar va bo'limlar."""
     exams = await db.list_exams()
-    lines = ["⚙️ <b>Admin panel</b>\n"]
+    open_count = sum(1 for ex in exams if ex["is_active"])
+    users = await db.count_users()
+    premium = await db.count_active_premium()
+    text = (
+        "⚙️ <b>Admin panel</b>\n\n"
+        f"📚 Testlar: <b>{len(exams)}</b> (ochiq: {open_count})\n"
+        f"👥 Foydalanuvchilar: <b>{users}</b> • 💎 Obunachilar: <b>{premium}</b>"
+    )
+    B = InlineKeyboardButton
+    rows = [
+        [B(text="📚 Testlar", callback_data="adm_exams"), B(text="👥 Foydalanuvchilar", callback_data="adm_users:0")],
+        [B(text="💎 Premium", callback_data="adm_prem"), B(text="📊 Natijalar", callback_data="results:0")],
+        [B(text="📣 Xabar yuborish", callback_data="adm_bc"), B(text="📈 Statistika", callback_data="adm_stats")],
+        [B(text="👮 Adminlar", callback_data="adm_admins"), B(text="⚙️ Sozlamalar", callback_data="adm_settings")],
+    ]
+    return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _exams_view():
+    exams = await db.list_exams()
+    lines = ["📚 <b>Testlar</b>\n"]
     rows = []
     if not exams:
         lines.append("Hali imtihon yo'q. Birinchisini yarating.")
@@ -437,21 +461,15 @@ async def _admin_panel_view():
     rows.append([InlineKeyboardButton(text="➕ Yangi imtihon / mavzu", callback_data="exam_new")])
     if exams:
         rows.append([InlineKeyboardButton(text="🗑 Hamma testlarni o'chirish", callback_data="exams_wipe_ask")])
-    rows.append([InlineKeyboardButton(text="📊 Oxirgi natijalar", callback_data="results")])
-    rows.append([InlineKeyboardButton(text="👥 Foydalanuvchilar", callback_data="adm_users:0")])
-    rows.append([
-        InlineKeyboardButton(text="💎 Premium", callback_data="adm_prem"),
-        InlineKeyboardButton(text="👮 Adminlar", callback_data="adm_admins"),
-        InlineKeyboardButton(text="📈 Statistika", callback_data="adm_stats"),
-    ])
-    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+    rows.append([InlineKeyboardButton(text="⬅️ Orqaga", callback_data="admin")])
+    return "\n".join(lines)[:4000], InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def _exam_view(exam_id: int):
     exam = await db.get_exam(exam_id)
     if not exam:
         return "Imtihon topilmadi.", InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="⬅️ Orqaga", callback_data="admin")]]
+            inline_keyboard=[[InlineKeyboardButton(text="⬅️ Testlar", callback_data="adm_exams")]]
         )
     kind = exam.get("kind") or "speaking"
     info = part_info(kind, exam.get("part"))
@@ -481,8 +499,12 @@ async def _exam_view(exam_id: int):
 
     toggle = "⚪️ Yopish" if exam["is_active"] else "🟢 O'quvchilarga ochish"
     rows.append([InlineKeyboardButton(text=toggle, callback_data=f"exam_toggle:{exam_id}")])
+    rows.append([
+        InlineKeyboardButton(text="✏️ Nomini o'zgartirish", callback_data=f"exam_ren:{exam_id}"),
+        InlineKeyboardButton(text="📋 Nusxalash", callback_data=f"exam_dup:{exam_id}"),
+    ])
     rows.append([InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"exam_del_ask:{exam_id}")])
-    rows.append([InlineKeyboardButton(text="⬅️ Orqaga", callback_data="admin")])
+    rows.append([InlineKeyboardButton(text="⬅️ Testlar", callback_data="adm_exams")])
     return "\n".join(lines)[:4000], InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -502,6 +524,16 @@ async def admin_panel_cb(callback: CallbackQuery, state: FSMContext):
         return await callback.answer()
     await state.clear()
     text, kb = await _admin_panel_view()
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "adm_exams")
+async def exams_list_cb(callback: CallbackQuery, state: FSMContext):
+    if not _admin_only(callback.from_user.id):
+        return await callback.answer()
+    await state.clear()
+    text, kb = await _exams_view()
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
     await callback.answer()
 
@@ -528,7 +560,7 @@ async def new_exam(callback: CallbackQuery, state: FSMContext):
                 InlineKeyboardButton(text=f"🎙 {SPEAKING_NAME}", callback_data="nk:speaking"),
                 InlineKeyboardButton(text=f"✍️ {WRITING_NAME}", callback_data="nk:writing"),
             ],
-            [InlineKeyboardButton(text="⬅️ Orqaga", callback_data="admin")],
+            [InlineKeyboardButton(text="⬅️ Orqaga", callback_data="adm_exams")],
         ]
     )
     await callback.message.edit_text("1/3. Qaysi bo'lim uchun?", reply_markup=kb)
@@ -729,7 +761,7 @@ async def delete_exam(callback: CallbackQuery):
     if not _admin_only(callback.from_user.id):
         return await callback.answer()
     await db.delete_exam(int(callback.data.split(":")[1]))
-    text, kb = await _admin_panel_view()
+    text, kb = await _exams_view()
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
     await callback.answer("O'chirildi")
 
@@ -745,7 +777,7 @@ async def wipe_exams_ask(callback: CallbackQuery):
         inline_keyboard=[
             [
                 InlineKeyboardButton(text="✅ Ha, hammasini o'chirish", callback_data="exams_wipe"),
-                InlineKeyboardButton(text="❌ Yo'q", callback_data="admin"),
+                InlineKeyboardButton(text="❌ Yo'q", callback_data="adm_exams"),
             ]
         ]
     )
@@ -763,20 +795,26 @@ async def wipe_exams(callback: CallbackQuery):
     if not _admin_only(callback.from_user.id):
         return await callback.answer()
     count = await db.delete_all_exams()
-    text, kb = await _admin_panel_view()
+    text, kb = await _exams_view()
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
     await callback.answer(f"{count} ta test o'chirildi", show_alert=True)
 
 
-@router.callback_query(F.data == "results")
+RESULTS_PER_PAGE = 10
+
+
+@router.callback_query(F.data.startswith("results:"))
 async def show_results(callback: CallbackQuery):
     if not _admin_only(callback.from_user.id):
         return await callback.answer()
-    rows = await db.recent_results(20)
+    page = max(0, int(callback.data.split(":")[1]))
+    rows = await db.recent_results(RESULTS_PER_PAGE + 1, page * RESULTS_PER_PAGE)
+    has_next = len(rows) > RESULTS_PER_PAGE
+    rows = rows[:RESULTS_PER_PAGE]
     if not rows:
-        text = "Hali hech kim topshirmagan."
+        text = "Hali hech kim topshirmagan." if page == 0 else "Bu sahifada natija yo'q."
     else:
-        lines = ["📊 <b>Oxirgi 20 ta natija</b>\n"]
+        lines = [f"📊 <b>Natijalar</b> (sahifa {page + 1})\n"]
         for r in rows:
             try:
                 res = json.loads(r["result_json"] or "{}")
@@ -788,9 +826,59 @@ async def show_results(callback: CallbackQuery):
                 f"<b>{score}</b> ({e(r['level'])}), {e(r['title'] or '?')}"
             )
         text = "\n".join(lines)
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Orqaga", callback_data="admin")]])
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"results:{page - 1}"))
+    if has_next:
+        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"results:{page + 1}"))
+    kb_rows = ([nav] if nav else []) + [[InlineKeyboardButton(text="⬅️ Orqaga", callback_data="admin")]]
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
     await callback.answer()
+
+
+# ---------- Nomini o'zgartirish / nusxalash ----------
+
+class RenameExam(StatesGroup):
+    title = State()
+
+
+@router.callback_query(F.data.startswith("exam_ren:"))
+async def rename_exam_ask(callback: CallbackQuery, state: FSMContext):
+    if not _admin_only(callback.from_user.id):
+        return await callback.answer()
+    exam_id = int(callback.data.split(":")[1])
+    await state.clear()
+    await state.set_state(RenameExam.title)
+    await state.update_data(exam_id=exam_id)
+    await callback.message.answer("Yangi nomni yozing (ko'pi bilan 100 belgi). Bekor qilish: /cancel")
+    await callback.answer()
+
+
+@router.message(RenameExam.title)
+async def rename_exam_save(message: Message, state: FSMContext):
+    if not _admin_only(message.from_user.id):
+        return
+    title = (message.text or "").strip()
+    if not title or title.startswith("/"):
+        return await message.answer("Nomni matn ko'rinishida yozing. Bekor qilish: /cancel")
+    exam_id = (await state.get_data())["exam_id"]
+    await state.clear()
+    await db.rename_exam(exam_id, title[:100])
+    text, kb = await _exam_view(exam_id)
+    await message.answer("✅ Nomi o'zgartirildi.")
+    await message.answer(text, parse_mode="HTML", reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("exam_dup:"))
+async def duplicate_exam(callback: CallbackQuery):
+    if not _admin_only(callback.from_user.id):
+        return await callback.answer()
+    new_id = await db.duplicate_exam(int(callback.data.split(":")[1]))
+    if not new_id:
+        return await callback.answer("Test topilmadi.", show_alert=True)
+    text, kb = await _exam_view(new_id)
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer("Nusxa yaratildi (yopiq holatda)")
 
 
 # ======================================================================

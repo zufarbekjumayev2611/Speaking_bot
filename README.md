@@ -17,7 +17,8 @@ Telegram bot: ko'p darajali (multilevel) imtihon uchun Speaking va Writing'ni AI
 | `EXAM_LANGUAGE` | yo'q | `tr` (standart) yoki `en` |
 | `GRADER_PROVIDER` | yo'q | `groq` (standart) yoki `claude` (`ANTHROPIC_API_KEY` ham kerak) |
 | `DB_PATH` | disk bilan | `/var/data/speakbot.db` (Disk mount: `/var/data`) |
-| `FREE_MONTHLY_LIMIT` | yo'q | Bepul foydalanuvchi uchun oyiga tekshiruvlar soni (standart `5`) |
+| `FREE_MONTHLY_LIMIT` | yo'q | Bepul tarif: oyiga tekshiruvlar soni (standart `5`) |
+| `STANDARD_MONTHLY_LIMIT` | yo'q | Standard tarif: oyiga tekshiruvlar soni (standart `30`) |
 | `PREMIUM_ENABLED` | yo'q | `0` bo'lsa premium tizimi o'chiq, hamma cheklovsiz (standart `1`) |
 | `WEBAPP_URL` | yo'q | Render `RENDER_EXTERNAL_URL` ni o'zi beradi |
 
@@ -33,12 +34,22 @@ Bepul rejada servis 15 daqiqa jimlikdan keyin uxlaydi; `main.py` o'zini har 10 d
 
 `speakbot/.env.example` dan `.env` yarating va `speakbot/run_local.sh` ni ishga tushiring (cloudflared kerak).
 
-## Premium va admin panel
+## Tariflar va admin panel
 
-- O'quvchi: «💎 Premium» tugmasi — holat, oylik limit va to'lov ma'lumoti.
-- Bepul foydalanuvchi oyiga `FREE_MONTHLY_LIMIT` ta tekshiruv oladi (har oyning 1-sanasida, O'zbekiston vaqti bilan yangilanadi); premium va adminlar cheklovsiz.
-- To'lov **qo'lda**: admin panel → 💎 Premium → «➕ Premium berish» → ID yoki @username → muddat (30/90/180/365 yoki istalgan kun) → to'lov izohi. Foydalanuvchiga xabar boradi. Faol premiumga qayta berilsa, muddat uzayadi.
-- 👮 Adminlar: `ADMIN_IDS` dagilar asosiy adminlar (o'chirib bo'lmaydi); ular panel orqali yangi admin qo'sha va olib tashlay oladi.
-- 👥 Foydalanuvchilar: ro'yxatdan (yoki ID/@username qidiruvidan) foydalanuvchini tanlab, kartadan to'g'ridan-to'g'ri premium berish/bekor qilish.
-- 🗑 «Hamma testlarni o'chirish» tugmasi (tasdiqlash bilan; foydalanuvchilar, premium va natijalar saqlanadi).
-- 📈 Statistika va to'lov ma'lumoti matnini tahrirlash ham panelda.
+**Tariflar** (oylik tekshiruv limiti, speaking + writing birga; oy O'zbekiston vaqti bilan 1-sanada yangilanadi):
+
+| Tarif | Standart limit | Qo'shimcha |
+|---|---|---|
+| 🆓 Bepul | oyiga **5** ta | — |
+| ⭐ Standard | oyiga 30 ta | — |
+| 💎 Pro | cheksiz | 2 mustaqil «ekspert» baholaydi (ball aniqroq) |
+
+Limitlar admin paneldagi **⚙️ Sozlamalar** orqali o'zgartiriladi (raqam yoki «cheksiz»). Boshlang'ich qiymatlar muhit o'zgaruvchilaridan: `FREE_MONTHLY_LIMIT` (5), `STANDARD_MONTHLY_LIMIT` (30). `PREMIUM_ENABLED=0` bo'lsa hamma cheksiz.
+
+**To'lov qo'lda:** 👥 Foydalanuvchilar → foydalanuvchini tanlang (yoki 💎 Premium → ➕ Premium berish) → tarif (Standard/Pro) → muddat (30/90/180/365 yoki istalgan kun) → to'lov izohi. Foydalanuvchiga xabar boradi; faol obunaga qayta berilsa, muddat uzayadi. Tugashiga 3 kun qolganda bot foydalanuvchiga o'zi eslatadi.
+
+**Admin panel:**
+- 📚 Testlar: yaratish, nomini o'zgartirish, nusxalash, ochish/yopish, o'chirish, «hamma testlarni o'chirish» (tasdiqlash bilan).
+- 👥 Foydalanuvchilar: ro'yxat/qidiruv, karta (tarif, oylik tekshiruvlar, oxirgi natijalar, premium tarixi), premium berish/bekor qilish, 🚫 bloklash.
+- 📣 Xabar yuborish: hammaga yoki tarif bo'yicha (ko'rinish + tasdiqlash, fon rejimida yuboriladi).
+- 📊 Natijalar (sahifalab), 📈 Statistika (faollik, tariflar, tekshiruvlar), 👮 Adminlar (`ADMIN_IDS` — asosiy adminlar, o'chirib bo'lmaydi), ⚙️ Sozlamalar (limitlar, to'lov matni).
