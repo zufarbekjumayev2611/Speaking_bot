@@ -34,6 +34,8 @@ class DbStorage(BaseStorage):
         return k, self._cache[k]
 
     async def _save(self, k: str, state: str | None, data: dict):
+        if self._cache.get(k) == (state, data):
+            return  # o'zgarmagan (masalan, bo'sh holatni yana tozalash) - bazaga murojaat shart emas
         self._cache[k] = (state, data)
         await db.fsm_set(k, state, json.dumps(data, ensure_ascii=False, default=str) if data else "")
 

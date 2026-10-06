@@ -21,7 +21,7 @@ import html
 
 import plans
 import writing
-from access import check_access, get_plan
+from access import acquire_check, check_access, get_plan, release_check
 from config import BOT_TOKEN, EXAM_LANGUAGE
 from languages import LANGUAGES
 from parts import part_info
@@ -210,13 +210,16 @@ async def finish_exam(request: web.Request):
         if not answers:
             return _error(400, "Hech bir javob yozib olinmadi.")
         # Imtihon davomida limit tugagan bo'lishi mumkin (masalan, bir vaqtda bir nechta imtihon ochilgan)
-        allowed, reason = await check_access(user["id"])
+        allowed, reason = await acquire_check(user["id"])
         if not allowed:
             return _error(403, reason)
-        exam = await db.get_exam(attempt["exam_id"])
-        part = exam.get("part") if exam else None
-        result = await grader.grade_speaking(answers, part, plans.raters_for(await get_plan(user["id"])))
-        await db.finish_attempt(attempt_id, result["total"], result["level"], result, result["raw"])
+        try:
+            exam = await db.get_exam(attempt["exam_id"])
+            part = exam.get("part") if exam else None
+            result = await grader.grade_speaking(answers, part, plans.raters_for(await get_plan(user["id"])))
+            await db.finish_attempt(attempt_id, result["total"], result["level"], result, result["raw"])
+        finally:
+            release_check(user["id"])
     except Exception as e:
         log.exception("Baholash xatosi (attempt %s)", attempt_id)
         if getattr(e, "status", None) == 429:

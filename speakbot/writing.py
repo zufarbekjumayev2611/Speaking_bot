@@ -21,7 +21,7 @@ import re
 import db
 import grader
 import plans
-from access import check_access, get_plan
+from access import acquire_check, get_plan, release_check
 from parts import part_info
 
 log = logging.getLogger("writing")
@@ -309,13 +309,15 @@ async def grade_and_store(bot, user_id: int, user_name: str, exam: dict, texts: 
     if key in _inflight:
         raise WritingBusy("Ishingiz hozir tekshirilmoqda — natijani bir oz kuting.")
     _inflight.add(key)  # tekshiruv va belgilash orasida await yo'q - parallel so'rov WritingBusy oladi
+    reserved = False
     try:
         prev = await db.find_recent_writing(user_id, exam["id"], joined)
         if prev and prev.get("result_json"):
             return json.loads(prev["result_json"]), False
-        allowed, reason = await check_access(user_id)
+        allowed, reason = await acquire_check(user_id)
         if not allowed:
             raise WritingDenied(reason)
+        reserved = True
         row = await db.get_writing_task(exam["id"])
         values = task_values(part, row)
         tasks = {c["key"]: grading_task(part, values, c["key"]) or (row or {}).get("text", "") for c in comps}
@@ -334,6 +336,8 @@ async def grade_and_store(bot, user_id: int, user_name: str, exam: dict, texts: 
         await db.finish_writing_submission(submission_id, result["total"], result["level"], result["raw"], result)
     finally:
         _inflight.discard(key)
+        if reserved:
+            release_check(user_id)
 
     try:
         await grader.send_long(bot, user_id, grader.result_message(exam["title"], info["name"], result))

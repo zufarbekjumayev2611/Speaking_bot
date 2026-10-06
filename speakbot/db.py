@@ -338,6 +338,20 @@ async def list_active_exams(kind: str, part: str | None):
     )
 
 
+async def active_exams_with_task(kind: str):
+    """Barcha ochiq (savoli bor) testlar va ularning birinchi savoli / topshirig'i - bitta so'rovda
+    (Turso'da har bir so'rov alohida tarmoq murojaati - menyular tez ochilishi uchun)."""
+    return await _fetchall(
+        """SELECT e.*, q.text AS task_text, q.meta AS task_meta
+           FROM exams e
+           JOIN questions q ON q.id = (SELECT q2.id FROM questions q2 WHERE q2.exam_id = e.id
+                                       ORDER BY q2.position, q2.id LIMIT 1)
+           WHERE e.is_active = 1 AND COALESCE(e.kind, 'speaking') = ?
+           ORDER BY e.id""",
+        (kind,),
+    )
+
+
 async def set_exam_active(exam_id: int, active: bool):
     await _execute("UPDATE exams SET is_active = ? WHERE id = ?", (int(active), exam_id))
 
