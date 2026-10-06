@@ -2,7 +2,9 @@
 
 Render'da ma'lumotlar o'chib ketmasligi uchun: TURSO_DATABASE_URL (libsql://<baza>.turso.io) va
 TURSO_AUTH_TOKEN berilsa, bot lokal SQLite fayl o'rniga Turso'dan foydalanadi."""
+import asyncio
 import base64
+import logging
 
 import aiohttp
 
@@ -79,4 +81,13 @@ class TursoClient:
         return out
 
     async def execute(self, sql: str, params=()) -> Result:
-        return (await self.batch([(sql, tuple(params))]))[0]
+        # O'qish so'rovlari tarmoq uzilishida bir marta qayta yuboriladi (yozishlar - yo'q: ikki marta yozilmasin)
+        retries = 1 if sql.lstrip()[:6].upper() in ("SELECT", "PRAGMA") else 0
+        for attempt in range(retries + 1):
+            try:
+                return (await self.batch([(sql, tuple(params))]))[0]
+            except (aiohttp.ClientConnectionError, asyncio.TimeoutError):
+                if attempt == retries:
+                    raise
+                logging.getLogger("turso").warning("Turso bilan aloqa uzildi, qayta urinilmoqda")
+                await asyncio.sleep(0.5)
