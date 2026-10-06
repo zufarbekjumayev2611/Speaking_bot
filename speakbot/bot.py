@@ -33,7 +33,7 @@ from access import check_access
 from config import EXAM_LANGUAGE, WEBAPP_URL, is_admin
 from languages import LANGUAGES
 from parts import part_info, parts_for, speaking_times
-from premium import BTN_PREMIUM, OLD_PREMIUM_BUTTONS
+from premium import BTN_PREMIUM, OLD_PREMIUM_BUTTONS, premium_info
 
 LANG = LANGUAGES[EXAM_LANGUAGE]
 log = logging.getLogger("bot")
@@ -131,8 +131,52 @@ async def cmd_cancel(message: Message, state: FSMContext):
     await message.answer("Bekor qilindi.", reply_markup=main_keyboard(message.from_user.id))
 
 
-async def _parts_keyboard(kind: str) -> InlineKeyboardMarkup | None:
+# Menyu tugmalari va buyruqlar har qanday holatda (savol, nom, topshiriq yozilayotganda ham) birinchi ushlanadi -
+# aks holda ular test nomi / savol matni sifatida saqlanib qolardi.
+@router.message(F.text.in_({BTN_PREMIUM} | OLD_PREMIUM_BUTTONS))
+@router.message(Command("premium", "tarif"))
+async def menu_premium(message: Message, state: FSMContext):
+    await premium_info(message, state)
+
+
+@router.message(F.text == BTN_ADMIN)
+@router.message(Command("admin"))
+async def menu_admin(message: Message, state: FSMContext):
+    await state.clear()
+    if not _admin_only(message.from_user.id):
+        # eski klaviaturada «Admin panel» qolgan oddiy foydalanuvchi - klaviaturani yangilaymiz
+        return await message.answer("Bo'limni tanlang 👇", reply_markup=main_keyboard(message.from_user.id))
+    text, kb = await _admin_panel_view()
+    await message.answer(text, parse_mode="HTML", reply_markup=kb)
+
+
+async def _student_exams(kind: str, part: str | None) -> list[dict]:
+    """O'quvchiga ko'rinadigan testlar: ochiq va (yazmada) topshirig'i to'liq bo'lganlari."""
+    exams = await db.list_active_exams(kind, part)
+    if kind != "writing":
+        return exams
+    out = []
+    for ex in exams:
+        values = writing.task_values(ex.get("part"), await db.get_writing_task(ex["id"]))
+        if not writing.missing_fields(ex.get("part"), values):
+            out.append(ex)
+    return out
+
+
+async def _student_counts(kind: str) -> dict:
     counts = await db.active_part_counts(kind)
+    if kind != "writing":
+        return counts
+    real = {}
+    for part in counts:
+        n = len(await _student_exams(kind, part))
+        if n:
+            real[part] = n
+    return real
+
+
+async def _parts_keyboard(kind: str) -> InlineKeyboardMarkup | None:
+    counts = await _student_counts(kind)
     if not counts:
         return None
     prefix = "sp" if kind == "speaking" else "wr"
@@ -224,7 +268,7 @@ async def writing_cancel(callback: CallbackQuery, state: FSMContext):
 async def writing_part(callback: CallbackQuery):
     part = _part_from_key(callback.data.split(":", 1)[1])
     info = part_info("writing", part)
-    exams = await db.list_active_exams("writing", part)
+    exams = await _student_exams("writing", part)
     rows = [[InlineKeyboardButton(text=f"✍️ {ex['title']}", callback_data=f"wt:{ex['id']}")] for ex in exams]
     rows.append([InlineKeyboardButton(text="⬅️ Turlar", callback_data="wr_menu")])
     words = f"\nHajm: <b>{e(info['words'])}</b>" if info.get("words") else ""
@@ -563,7 +607,9 @@ async def _writing_task_view(exam: dict) -> tuple[list[str], list[list[InlineKey
             lines.append(f"\n{i}. ❗ <b>{e(spec['short'])}</b> — kiritilmagan")
     has_photo = bool(row and row.get("photo_file_id"))
     lines.append("\n🖼 Rasm: " + ("bor" if has_photo else "yo'q (ixtiyoriy)"))
-    if missing:
+    if missing and exam["is_active"]:
+        lines.append("\n⚠️ Mavzu ochiq, lekin topshiriq to'liq emas — o'quvchilar uni ko'rmaydi. Yetishmayotgan qismlarni kiriting.")
+    elif missing:
         lines.append("\n❗ Topshiriq to'liq emas — yetishmayotgan qismlarni kiriting, shundan keyin o'quvchilarga ochish mumkin.")
     else:
         lines.append("\n💡 «👁 O'quvchi ko'rinishi» tugmasi bilan o'quvchi ko'radigan topshiriqni tekshiring.")
@@ -623,16 +669,6 @@ async def _exam_view(exam_id: int):
     rows.append([InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"exam_del_ask:{exam_id}")])
     rows.append([InlineKeyboardButton(text="⬅️ Testlar", callback_data="adm_exams")])
     return _join_limited(lines), InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-@router.message(F.text == BTN_ADMIN)
-@router.message(Command("admin"))
-async def admin_panel(message: Message, state: FSMContext):
-    if not _admin_only(message.from_user.id):
-        return
-    await state.clear()
-    text, kb = await _admin_panel_view()
-    await message.answer(text, parse_mode="HTML", reply_markup=kb)
 
 
 @router.callback_query(F.data == "admin")
@@ -702,7 +738,7 @@ async def new_exam_kind(callback: CallbackQuery, state: FSMContext):
     for info in parts_for(kind).values():
         time_note = f" ⏱ ~{info['time']} daqiqa." if kind == "writing" and info.get("time") else ""
         lines.append(f"• <b>{e(info['name'])}</b> — {e(info['about'])}{time_note}")
-    rows = [[InlineKeyboardButton(text=info["name"], callback_data=f"np:{key}")] for key, info in parts_for(kind).items()]
+    rows = [[InlineKeyboardButton(text=info["name"], callback_data=f"np:{kind}:{key}")] for key, info in parts_for(kind).items()]
     rows.append([InlineKeyboardButton(text="⬅️ Orqaga", callback_data="adm_exams")])
     await callback.message.edit_text("\n".join(lines), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
     await callback.answer()
@@ -712,12 +748,15 @@ async def new_exam_kind(callback: CallbackQuery, state: FSMContext):
 async def new_exam_part(callback: CallbackQuery, state: FSMContext):
     if not _admin_only(callback.from_user.id):
         return await callback.answer()
-    data = await state.get_data()
-    kind = data.get("kind", "speaking")
-    part = callback.data.split(":", 1)[1]
-    if part not in parts_for(kind):
+    bits = callback.data.split(":", 2)
+    if len(bits) == 3:  # np:<kind>:<part> - tur tugmaning o'zida (holat yo'qolsa ham to'g'ri ishlaydi)
+        kind, part = bits[1], bits[2]
+    else:  # eski xabarlardagi np:<part>
+        kind, part = (await state.get_data()).get("kind", "speaking"), bits[1]
+    if kind not in KIND_NAME or part not in parts_for(kind):
         return await callback.answer("Qaytadan boshlang: «📚 Testlar».", show_alert=True)
-    await state.update_data(part=part)
+    await state.clear()
+    await state.update_data(kind=kind, part=part)
     await state.set_state(NewExam.title)
     name = e(part_info(kind, part)["name"])
     if kind == "writing":
@@ -862,6 +901,8 @@ async def writing_task_save(message: Message, state: FSMContext):
 async def writing_photo_ask(callback: CallbackQuery, state: FSMContext):
     if not _admin_only(callback.from_user.id):
         return await callback.answer()
+    if not await db.get_exam(int(callback.data.split(":")[1])):
+        return await callback.answer("Mavzu topilmadi (o'chirilgan bo'lishi mumkin).", show_alert=True)
     await state.clear()
     await state.set_state(WritingTask.photo)
     await state.update_data(exam_id=int(callback.data.split(":")[1]))
@@ -878,6 +919,8 @@ async def writing_task_photo(message: Message, state: FSMContext):
         return
     exam_id = (await state.get_data()).get("exam_id", 0)
     await state.clear()
+    if not await db.get_exam(exam_id):
+        return await message.answer("Mavzu topilmadi (o'chirilgan bo'lishi mumkin).")
     await db.set_writing_photo(exam_id, message.photo[-1].file_id)
     view, kb = await _exam_view(exam_id)
     await message.answer("✅ Rasm saqlandi.")
@@ -894,6 +937,8 @@ async def writing_photo_remove(callback: CallbackQuery):
     if not _admin_only(callback.from_user.id):
         return await callback.answer()
     exam_id = int(callback.data.split(":")[1])
+    if not await db.get_writing_task(exam_id):
+        return await callback.answer("Mavzu topilmadi (o'chirilgan bo'lishi mumkin).", show_alert=True)
     await db.set_writing_photo(exam_id, None)
     view, kb = await _exam_view(exam_id)
     await callback.message.edit_text(view, parse_mode="HTML", reply_markup=kb)
@@ -1026,7 +1071,7 @@ async def show_results(callback: CallbackQuery):
                 score = f"{r['score']}/75"
             lines.append(
                 f"{KIND_ICON.get(r['kind'], '')} {e(r['full_name'] or '?')} — "
-                f"<b>{score}</b> ({e(r['level'])}), {e(r['title'] or '?')}"
+                f"<b>{score}</b> ({e(r['level'])}), {e(r['title'] or 'o‘chirilgan test')}"
             )
         text = "\n".join(lines)
     nav = []
@@ -1111,9 +1156,12 @@ async def new_question(callback: CallbackQuery, state: FSMContext):
         return await callback.answer()
     exam_id = int(callback.data.split(":")[1])
     exam = await db.get_exam(exam_id)
+    if not exam:
+        return await callback.answer("Test topilmadi (o'chirilgan bo'lishi mumkin).", show_alert=True)
     position = len(await db.get_questions(exam_id)) + 1  # qismdagi savol tartibi (vaqt tavsiyasi uchun)
+    await state.clear()
     await state.set_state(NewQuestion.text)
-    await state.update_data(exam_id=exam_id, part=exam.get("part") if exam else None, position=position)
+    await state.update_data(exam_id=exam_id, part=exam.get("part"), position=position)
     await callback.message.answer(
         f"1/4. {position}-savol matnini yozing ({LANG['name_uz']}da).\n"
         f"Masalan: <i>{e(LANG['question_example'])}</i>",
@@ -1125,8 +1173,8 @@ async def new_question(callback: CallbackQuery, state: FSMContext):
 @router.message(NewQuestion.text)
 async def new_question_text(message: Message, state: FSMContext):
     text = (message.text or "").strip()
-    if not text:
-        return await message.answer("Savolni matn ko'rinishida yozing.")
+    if not text or text.startswith("/"):
+        return await message.answer("Savolni matn ko'rinishida yozing. Bekor qilish: /cancel")
     await state.update_data(text=text[:2500])
     await state.set_state(NewQuestion.photo)
     data = await state.get_data()
@@ -1148,8 +1196,20 @@ async def _ask_prep(message: Message, state: FSMContext):
 
 @router.message(NewQuestion.photo, F.photo)
 async def new_question_photo(message: Message, state: FSMContext):
-    await state.update_data(photo=message.photo[-1].file_id)
+    await state.update_data(photo=message.photo[-1].file_id, album=message.media_group_id)
+    if message.media_group_id:
+        await message.answer("ℹ️ Bir nechta rasm (albom) yuborildi — savolga faqat birinchisi biriktirildi. "
+                             "Ikki rasmni ko'rsatish uchun ularni bitta rasmga birlashtirib yuboring.")
     await _ask_prep(message, state)
+
+
+@router.message(NewQuestion.prep, F.photo)
+@router.message(NewQuestion.answer, F.photo)
+async def new_question_album_rest(message: Message, state: FSMContext):
+    """Albomning qolgan rasmlari keyingi bosqichga kelib qoladi - ularni jim o'tkazib yuboramiz."""
+    if message.media_group_id and message.media_group_id == (await state.get_data()).get("album"):
+        return
+    await message.answer("Yuqoridagi tugmalardan vaqtni tanlang. Bekor qilish: /cancel")
 
 
 @router.callback_query(NewQuestion.photo, F.data == "q_nophoto")
@@ -1196,6 +1256,10 @@ async def delete_question(callback: CallbackQuery):
     if not q:
         return await callback.answer("Savol topilmadi.")
     await db.delete_question(q["id"])
+    exam = await db.get_exam(q["exam_id"])
+    closed = bool(exam and exam["is_active"] and not await db.get_questions(q["exam_id"]))
+    if closed:  # savolsiz test o'quvchilarga ko'rinmaydi - admin ham uni "ochiq" deb o'ylamasin
+        await db.set_exam_active(q["exam_id"], False)
     text, kb = await _exam_view(q["exam_id"])
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
-    await callback.answer("O'chirildi")
+    await callback.answer("O'chirildi. Savol qolmagani uchun test yopildi." if closed else "O'chirildi", show_alert=closed)
