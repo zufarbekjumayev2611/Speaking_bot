@@ -1,0 +1,593 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Yazma</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #f6f8fb);
+    --surface: var(--tg-theme-secondary-bg-color, #ffffff);
+    --text: var(--tg-theme-text-color, #16202e);
+    --hint: var(--tg-theme-hint-color, #6f7c8c);
+    --cobalt: #1e4fa3;          /* Iznik koshinlari ko'ki */
+    --turquoise: #12a095;
+    --clay: #c2413a;
+    --amber: #b7791f;
+    --line: color-mix(in srgb, var(--text) 12%, transparent);
+    --safe-b: env(safe-area-inset-bottom, 0px);
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+  }
+  main {
+    min-height: 100%;
+    max-width: 560px;
+    margin: 0 auto;
+    padding: 16px 16px calc(20px + var(--safe-b));
+    display: flex;
+    flex-direction: column;
+  }
+  h1 { font-size: 24px; line-height: 1.2; margin: 8px 0 8px; letter-spacing: -0.02em; }
+  h2 { font-size: 17px; margin: 20px 0 8px; }
+  p { margin: 0 0 12px; line-height: 1.5; }
+  .muted { color: var(--hint); font-size: 14.5px; }
+  .grow { flex: 1; }
+
+  .btn {
+    width: 100%;
+    border: 0;
+    border-radius: 14px;
+    padding: 15px;
+    font: inherit;
+    font-size: 16px;
+    font-weight: 650;
+    color: #fff;
+    background: var(--cobalt);
+  }
+  .btn:active { transform: scale(0.985); }
+  .btn:disabled { opacity: 0.5; }
+  .btn.ghost { background: transparent; color: var(--cobalt); border: 1.5px solid var(--line); margin-top: 10px; }
+  .btn.small { width: auto; padding: 9px 14px; font-size: 14.5px; border-radius: 11px; }
+  .btn:focus-visible { outline: 3px solid var(--turquoise); outline-offset: 2px; }
+
+  /* ---------- Kirish ---------- */
+  .rules { list-style: none; padding: 0; margin: 14px 0 20px; }
+  .rules li { display: flex; gap: 12px; padding: 11px 0; border-bottom: 1px solid var(--line); line-height: 1.45; font-size: 15px; }
+  .rules li span:first-child { font-size: 19px; }
+  .notice { background: color-mix(in srgb, var(--amber) 12%, transparent); border-radius: 12px; padding: 11px 13px; font-size: 14.5px; line-height: 1.45; margin-bottom: 12px; }
+
+  /* ---------- Imtihon ---------- */
+  .topbar {
+    position: sticky; top: 0; z-index: 5;
+    display: flex; align-items: center; gap: 10px;
+    background: var(--bg); padding: 6px 0 10px;
+  }
+  .timer { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+  .timer.low { color: var(--clay); }
+  .timer small { display: block; font-size: 12px; font-weight: 500; color: var(--hint); letter-spacing: 0; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 10px; overflow-x: auto; }
+  .tab {
+    flex: 1; min-width: 92px; border: 1.5px solid var(--line); background: var(--surface); color: var(--text);
+    border-radius: 11px; padding: 8px 6px; font: inherit; font-size: 13.5px; line-height: 1.25; text-align: center;
+  }
+  .tab b { display: block; font-size: 14px; }
+  .tab.active { border-color: var(--cobalt); box-shadow: inset 0 0 0 1px var(--cobalt); }
+  .tab .wc { font-variant-numeric: tabular-nums; }
+  .s-ok { color: var(--turquoise); }
+  .s-short, .s-long { color: var(--amber); }
+  .s-critical, .s-empty { color: var(--clay); }
+
+  .task { background: var(--surface); border-radius: 12px; margin-bottom: 10px; border: 1px solid var(--line); }
+  .task-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; font-weight: 650; font-size: 14.5px; cursor: pointer; user-select: none; }
+  .task-body { padding: 0 12px 12px; max-height: 32vh; overflow-y: auto; font-size: 14.5px; line-height: 1.5; white-space: pre-wrap; }
+  .task-body .inst { margin-top: 10px; padding: 9px 11px; border-radius: 10px; background: color-mix(in srgb, var(--cobalt) 9%, transparent); font-weight: 560; }
+  .task-photo { width: 100%; max-height: 28vh; object-fit: contain; border-radius: 10px; margin-top: 8px; }
+  .task.collapsed .task-body { display: none; }
+
+  .chars { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .chars button {
+    min-width: 38px; height: 38px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface);
+    color: var(--text); font: inherit; font-size: 17px; touch-action: manipulation;
+  }
+  .chars button:active { background: color-mix(in srgb, var(--cobalt) 15%, var(--surface)); }
+  textarea {
+    width: 100%; min-height: 34vh; flex: 1; resize: vertical;
+    border: 1.5px solid var(--line); border-radius: 12px; padding: 12px;
+    font: inherit; font-size: 16px; line-height: 1.5; color: var(--text); background: var(--surface);
+  }
+  textarea:focus { outline: none; border-color: var(--cobalt); }
+  .counter { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; margin: 8px 0 12px; }
+  .counter b { font-variant-numeric: tabular-nums; }
+  .toast {
+    position: fixed; left: 50%; top: 14px; transform: translateX(-50%); z-index: 20;
+    background: var(--clay); color: #fff; padding: 9px 16px; border-radius: 12px; font-size: 14.5px; font-weight: 600;
+  }
+
+  /* ---------- Holatlar ---------- */
+  .center { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 14px; }
+  .spinner { width: 34px; height: 34px; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--cobalt); animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2s; } }
+
+  /* ---------- Natija ---------- */
+  .score { display: flex; align-items: baseline; gap: 12px; margin: 6px 0 4px; }
+  .score b { font-size: 60px; line-height: 1; letter-spacing: -0.04em; }
+  .score span { color: var(--hint); font-size: 18px; }
+  .level { display: inline-block; padding: 4px 12px; border-radius: 8px; background: var(--cobalt); color: #fff; font-weight: 700; margin-bottom: 10px; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 13px 14px; margin-top: 12px; }
+  .card-head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+  .card-head b { font-size: 16px; }
+  .band { font-weight: 750; font-size: 18px; white-space: nowrap; }
+  .reason { font-style: italic; margin: 6px 0 4px; font-size: 14.5px; line-height: 1.45; }
+  .note-row { padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 14.5px; line-height: 1.45; }
+  .note-row:last-child { border-bottom: 0; }
+  .mistake { padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 15px; line-height: 1.45; }
+  .mistake:last-child { border-bottom: 0; }
+  .wrong { color: var(--clay); text-decoration: line-through; }
+  .right { color: var(--turquoise); font-weight: 600; }
+  .note { color: var(--hint); font-size: 13.5px; }
+  .sub { font-size: 14.5px; font-weight: 700; margin: 12px 0 2px; }
+  .tips { padding-left: 18px; margin: 0; line-height: 1.5; }
+  .tips li { margin-bottom: 6px; }
+</style>
+</head>
+<body>
+<main id="app">
+  <!-- Yuklanish -->
+  <section class="center" id="loading">
+    <div class="spinner"></div>
+    <p class="muted" id="loadingText">Topshiriq yuklanmoqda…</p>
+  </section>
+
+  <!-- Xato -->
+  <section class="center" id="error" hidden>
+    <div style="font-size:40px">⚠️</div>
+    <p id="errorText"></p>
+    <button class="btn" id="errorRetry" hidden>Qayta urinish</button>
+    <button class="btn ghost" id="errorBack" hidden>✏️ Matnlarga qaytish</button>
+  </section>
+
+  <!-- Kirish -->
+  <section id="intro" hidden>
+    <h1 id="examTitle"></h1>
+    <p class="muted" id="examMeta"></p>
+    <div class="notice" id="draftNotice" hidden></div>
+    <ul class="rules" id="rules"></ul>
+    <div class="grow"></div>
+    <button class="btn" id="startBtn">Boshlash</button>
+    <button class="btn ghost" id="restartBtn" hidden>Yangidan boshlash</button>
+  </section>
+
+  <!-- Imtihon -->
+  <section id="exam" hidden style="flex-direction:column;flex:1">
+    <div class="topbar">
+      <div class="timer" id="timer">--:--<small>qolgan vaqt</small></div>
+      <div class="grow"></div>
+      <button class="btn small" id="submitBtn">Topshirish</button>
+    </div>
+    <div class="tabs" id="tabs"></div>
+    <div class="task" id="task">
+      <div class="task-head" id="taskHead"><span id="taskTitle">Topshiriq</span><span id="taskToggle">▾</span></div>
+      <div class="task-body">
+        <div id="taskContext"></div>
+        <div class="inst" id="taskInst" hidden></div>
+        <img class="task-photo" id="taskPhoto" alt="Topshiriq rasmi" hidden />
+      </div>
+    </div>
+    <div class="chars" id="chars" hidden></div>
+    <textarea id="editor" spellcheck="false" autocapitalize="sentences" autocomplete="off" placeholder="Matningizni shu yerga yozing…"></textarea>
+    <div class="counter"><span id="wcText"></span><span class="muted" id="wcHint"></span></div>
+  </section>
+
+  <!-- Natija -->
+  <section id="result" hidden>
+    <p class="muted" id="resTitle" style="margin-top:8px"></p>
+    <div class="score"><b id="resScore"></b><span id="resMax"></span></div>
+    <span class="level" id="resLevel"></span>
+    <p class="muted" id="resRaw"></p>
+    <div id="resComponents"></div>
+    <div id="resTipsWrap"><h2>Tavsiyalar</h2><ul class="tips" id="resTips"></ul></div>
+    <p class="muted" style="margin-top:20px">Baho Bilimni baholash agentligining rasmiy mezonlari asosida sun'iy intellekt tomonidan qo'yildi. Natija bot chatiga ham yuborildi.</p>
+    <button class="btn" id="closeBtn" style="margin-top:8px">Yopish</button>
+  </section>
+</main>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+const tg = window.Telegram?.WebApp;
+tg?.ready();
+tg?.expand();
+tg?.disableVerticalSwipes?.();
+
+const $ = (id) => document.getElementById(id);
+const SCREENS = ["loading", "error", "intro", "exam", "result"];
+function show(name) {
+  SCREENS.forEach((s) => ($(s).hidden = s !== name));
+  if (name === "exam") $("exam").style.display = "flex";
+}
+const initData = tg?.initData || "";
+const examId = new URLSearchParams(location.search).get("exam");
+const userId = tg?.initDataUnsafe?.user?.id || "u";
+const DRAFT_KEY = `wdraft:${userId}:${examId}`;
+
+let exam = null;          // /api/wexam javobi
+let texts = {};           // {email1: "...", ...}
+let active = 0;           // ochiq bo'lim (tab)
+let startedAt = 0;        // ms
+let timer = null;
+let submitting = false;
+let warned5 = false;
+let saveTimer = null;
+let editorBound = false;  // matn maydoni hozir qaysidir bo'limga bog'langanmi
+
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// ---------- Yordamchilar ----------
+async function api(path, options = {}) {
+  const res = await fetch(path, { ...options, headers: { ...(options.headers || {}), "X-Init-Data": initData } });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.error || "Server bilan aloqa uzildi. Internetni tekshiring.");
+    err.status = res.status;
+    throw err;
+  }
+  return data;
+}
+
+function fail(message, retry, canGoBack) {
+  $("errorText").textContent = message;
+  $("errorRetry").hidden = !retry;
+  $("errorRetry").onclick = retry;
+  $("errorBack").hidden = !canGoBack;
+  show("error");
+}
+
+function haptic(type) { tg?.HapticFeedback?.notificationOccurred?.(type); }
+
+function toast(message, ms = 3500) {
+  $("toast").textContent = message;
+  $("toast").hidden = false;
+  clearTimeout(toast.t);
+  toast.t = setTimeout(() => ($("toast").hidden = true), ms);
+}
+
+function confirmDialog(message) {
+  return new Promise((resolve) => {
+    try {
+      if (tg?.showConfirm && tg.isVersionAtLeast?.("6.2")) return tg.showConfirm(message, (ok) => resolve(!!ok));
+    } catch { /* eski Telegram - oddiy oyna */ }
+    resolve(window.confirm(message));
+  });
+}
+
+let WORD_RE;
+try { WORD_RE = new RegExp("[\\p{L}\\p{N}]", "u"); } catch { WORD_RE = /\w/; }
+const countWords = (t) => String(t || "").split(/\s+/).filter((w) => WORD_RE.test(w)).length;
+
+// Bot (Python) dagi writing.length_status bilan bir xil qoida
+function lengthStatus(c, n) {
+  if (n === 0) return "empty";
+  if (n <= c.critical) return "critical";
+  if (n < c.min) return "short";
+  if (n > c.max * 1.3) return "long";
+  return "ok";
+}
+const STATUS_TEXT = {
+  ok: "hajm talabga mos",
+  short: "qisqa — talabdan kam",
+  long: "tavsiya etilganidan ancha uzun",
+  critical: "juda qisqa — ball past bo'ladi",
+  empty: "hali yozilmagan",
+};
+
+const fmt = (sec) => {
+  sec = Math.max(0, Math.ceil(sec));
+  return `${String(Math.floor(sec / 60)).padStart(2, "0")}:${String(sec % 60).padStart(2, "0")}`;
+};
+const limitMs = () => (exam?.time_min || 60) * 60 * 1000;
+const leftSec = () => (startedAt + limitMs() - Date.now()) / 1000;
+
+// ---------- Qoralama (shu qurilmada saqlanadi) ----------
+function loadDraft() {
+  try {
+    const d = JSON.parse(localStorage.getItem(DRAFT_KEY) || "null");
+    return d && typeof d === "object" && d.startedAt ? d : null;
+  } catch { return null; }
+}
+function saveDraft() {
+  try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ startedAt, texts, active })); } catch { /* xotira yopiq */ }
+}
+function clearDraft() {
+  try { localStorage.removeItem(DRAFT_KEY); } catch { /* xotira yopiq */ }
+}
+const hasText = (t) => Object.values(t || {}).some((v) => String(v || "").trim());
+
+// ---------- 1. Yuklash ----------
+async function load() {
+  if (!initData) return fail("Bu sahifani bot ichidagi tugma orqali oching.");
+  if (!examId) return fail("Mavzu tanlanmagan. Botga qaytib, mavzuni qayta tanlang.");
+  show("loading");
+  try {
+    exam = await api(`/api/wexam/${encodeURIComponent(examId)}`);
+  } catch (e) {
+    return fail(e.message, e.status === 403 || e.status === 404 ? null : load);
+  }
+  if (exam.section_name) document.title = exam.section_name;
+  $("examTitle").textContent = exam.title;
+  $("examMeta").textContent = `${exam.part_name} • ${exam.time_min} daqiqa`;
+  const parts = exam.components.map((c) => `${c.name} — ${c.words}`).join("; ");
+  const rules = [
+    ["⏱", `Vaqt: ${exam.time_min} daqiqa (rasmiy tavsiya). Taymer «Boshlash»ni bosganingizda ishga tushadi.`],
+    ["📝", `Yoziladi: ${parts}. Har bir matn alohida bo'limda (yuqoridagi tugmalar).`],
+    ["🔢", "So'zlar soni yozish davomida ko'rinib turadi: yashil — talabga mos."],
+    ["💾", "Matnlar shu telefonda avtomatik saqlanadi — oyna yopilib qolsa ham davom ettirasiz."],
+    ["⏰", "Vaqt tugaganda ish avtomatik topshiriladi — xuddi haqiqiy imtihondagidek."],
+  ];
+  if (exam.special_chars) rules.splice(3, 0, ["🔤", `Klaviaturada ${exam.lang_name} harflari bo'lmasa — matn ustidagi harf tugmalaridan foydalaning.`]);
+  $("rules").innerHTML = rules.map(([i, t]) => `<li><span>${i}</span><span>${esc(t)}</span></li>`).join("");
+
+  const draft = loadDraft();
+  $("restartBtn").hidden = !draft;
+  if (draft) {
+    const left = (draft.startedAt + limitMs() - Date.now()) / 1000;
+    if (left > 0) {
+      $("draftNotice").textContent = `Oldingi urinish saqlangan: ${fmt(left)} vaqt qoldi.`;
+      $("startBtn").textContent = "Davom ettirish";
+      $("startBtn").onclick = () => resume(draft);
+    } else if (hasText(draft.texts)) {
+      $("draftNotice").textContent = "Oldingi urinish vaqti tugagan. Yozganlaringizni topshirishingiz yoki yangidan boshlashingiz mumkin.";
+      $("startBtn").textContent = "Yozganlarimni topshirish";
+      $("startBtn").onclick = () => { resume(draft, true); submit(true); };
+    } else {
+      clearDraft();
+      $("restartBtn").hidden = true;
+    }
+    $("draftNotice").hidden = !loadDraft();
+  }
+  show("intro");
+}
+
+$("startBtn").onclick = () => begin();
+$("restartBtn").onclick = async () => {
+  if (!(await confirmDialog("Oldingi yozganlaringiz o'chiriladi. Yangidan boshlaysizmi?"))) return;
+  clearDraft();
+  begin();
+};
+
+// ---------- 2. Imtihon ----------
+function begin() {
+  texts = {};
+  active = 0;
+  startedAt = Date.now();
+  saveDraft();
+  openExam();
+}
+
+function resume(draft, noTimer) {
+  texts = draft.texts || {};
+  active = Math.min(Math.max(0, draft.active | 0), exam.components.length - 1);
+  startedAt = draft.startedAt;
+  openExam(noTimer);
+}
+
+function openExam(noTimer) {
+  editorBound = false;
+  $("editor").value = "";
+  buildChars();
+  renderTabs();
+  selectTab(active);
+  show("exam");
+  tg?.enableClosingConfirmation?.();
+  if (!noTimer) {
+    clearInterval(timer);
+    tick();
+    timer = setInterval(tick, 500);
+  }
+}
+
+function tick() {
+  const left = leftSec();
+  $("timer").innerHTML = `${fmt(left)}<small>qolgan vaqt</small>`;
+  $("timer").classList.toggle("low", left <= 300);
+  if (left <= 300 && left > 0 && !warned5) {
+    warned5 = true;
+    haptic("warning");
+    toast("⏰ 5 daqiqa qoldi");
+  }
+  if (left <= 0) {
+    clearInterval(timer);
+    timeUp();
+  }
+}
+
+async function timeUp() {
+  saveDraft();
+  if (!hasText(texts)) {
+    clearDraft();
+    tg?.disableClosingConfirmation?.();
+    return fail("Vaqt tugadi. Hech narsa yozilmagani uchun ish topshirilmadi.");
+  }
+  haptic("warning");
+  toast("⏰ Vaqt tugadi — ishingiz topshirilmoqda", 5000);
+  submit(true);
+}
+
+function renderTabs() {
+  $("tabs").innerHTML = exam.components.map((c, i) => {
+    const n = countWords(texts[c.key]);
+    const st = lengthStatus(c, n);
+    return `<button class="tab${i === active ? " active" : ""}" data-i="${i}">
+      <b>${esc(c.name)}</b><span class="wc s-${st}">${n} so'z</span></button>`;
+  }).join("");
+  $("tabs").querySelectorAll(".tab").forEach((b) => (b.onclick = () => selectTab(Number(b.dataset.i))));
+}
+
+function selectTab(i) {
+  if (editorBound) texts[exam.components[active].key] = $("editor").value;
+  active = i;
+  const c = exam.components[i];
+  $("taskTitle").textContent = `Topshiriq — ${c.name}`;
+  $("taskContext").textContent = c.context || "";
+  $("taskContext").hidden = !c.context;
+  $("taskInst").textContent = c.instruction ? `📌 ${c.instruction}` : "";
+  $("taskInst").hidden = !c.instruction;
+  const photo = exam.photo && i === 0;
+  $("taskPhoto").hidden = !photo;
+  if (photo) $("taskPhoto").src = exam.photo;
+  $("editor").value = texts[c.key] || "";
+  editorBound = true;
+  $("editor").placeholder = `${c.name}: ${c.words}. Matningizni shu yerga yozing…`;
+  $("task").classList.remove("collapsed");
+  $("taskToggle").textContent = "▾";
+  renderTabs();
+  updateCounter();
+  saveDraft();
+}
+
+$("taskHead").onclick = () => {
+  const collapsed = $("task").classList.toggle("collapsed");
+  $("taskToggle").textContent = collapsed ? "▸" : "▾";
+};
+
+function updateCounter() {
+  const c = exam.components[active];
+  const n = countWords($("editor").value);
+  const st = lengthStatus(c, n);
+  $("wcText").innerHTML = `<b class="s-${st}">${n} so'z</b> · ${esc(STATUS_TEXT[st])}`;
+  $("wcHint").textContent = `talab: ${c.words}`;
+  const tab = $("tabs").querySelector(`.tab[data-i="${active}"] .wc`);
+  if (tab) { tab.textContent = `${n} so'z`; tab.className = `wc s-${st}`; }
+}
+
+$("editor").addEventListener("input", () => {
+  texts[exam.components[active].key] = $("editor").value;
+  updateCounter();
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(saveDraft, 400);
+});
+document.addEventListener("visibilitychange", () => { if (exam && startedAt && !submitting) saveDraft(); });
+
+// Turkcha (maxsus) harflar paneli: tugma bosilganda matn maydonidan fokus ketmaydi
+function buildChars() {
+  const chars = Array.from(exam.special_chars || "");
+  $("chars").hidden = !chars.length;
+  $("chars").innerHTML = chars.map((ch) => `<button type="button" data-ch="${esc(ch)}">${esc(ch)}</button>`).join("");
+  $("chars").querySelectorAll("button").forEach((b) => {
+    const insert = (ev) => { ev.preventDefault(); insertText(b.dataset.ch); };
+    if (window.PointerEvent) b.addEventListener("pointerdown", insert);
+    else { b.addEventListener("touchstart", insert, { passive: false }); b.addEventListener("mousedown", insert); }
+  });
+}
+
+function insertText(ch) {
+  const ta = $("editor");
+  const start = ta.selectionStart ?? ta.value.length;
+  const end = ta.selectionEnd ?? start;
+  if (ta.setRangeText) ta.setRangeText(ch, start, end, "end");
+  else { ta.value = ta.value.slice(0, start) + ch + ta.value.slice(end); ta.selectionStart = ta.selectionEnd = start + ch.length; }
+  ta.focus();
+  ta.dispatchEvent(new Event("input"));
+}
+
+// ---------- 3. Topshirish ----------
+$("submitBtn").onclick = () => submit(false);
+$("errorBack").onclick = () => { show("exam"); };
+
+async function submit(auto) {
+  if (submitting) return;
+  if (editorBound) texts[exam.components[active].key] = $("editor").value;
+  saveDraft();
+  if (!auto) {
+    if (!hasText(texts)) return toast("Avval matn yozing");
+    const lines = exam.components.map((c) => {
+      const n = countWords(texts[c.key]);
+      const st = lengthStatus(c, n);
+      return `${st === "ok" ? "✅" : "⚠️"} ${c.name}: ${n} so'z (talab: ${c.words})`;
+    });
+    const ok = await confirmDialog(`Ishni topshirasizmi? Keyin o'zgartirib bo'lmaydi.\n\n${lines.join("\n")}`);
+    if (!ok) return;
+  }
+  submitting = true;
+  clearInterval(timer);
+  show("loading");
+  $("loadingText").textContent = "Ishingiz rasmiy mezonlar bo'yicha tekshirilmoqda… (20–60 soniya)";
+  try {
+    const result = await api("/api/wsubmit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        exam_id: Number(exam.exam_id),
+        texts,
+        elapsed_sec: Math.round((Math.min(Date.now(), startedAt + limitMs()) - startedAt) / 1000),
+      }),
+    });
+    submitting = false;
+    clearDraft();
+    tg?.disableClosingConfirmation?.();
+    showResult(result);
+  } catch (e) {
+    submitting = false;
+    const timeLeft = leftSec() > 0;
+    if (timeLeft) { clearInterval(timer); timer = setInterval(tick, 500); }
+    const retry = e.status === 403 || e.status === 404 ? null : () => submit(true);
+    fail(e.message, retry, timeLeft && e.status !== 404);
+  }
+}
+
+// ---------- 4. Natija ----------
+const NOTE_LABELS = { task: "Topshiriq va uslub", grammar: "Grammatika va imlo", vocabulary: "So'z boyligi", coherence: "Izchillik va bog'lovchilar" };
+
+function componentCard(c) {
+  const notes = Object.entries(NOTE_LABELS)
+    .filter(([k]) => c.notes && c.notes[k])
+    .map(([k, label]) => `<div class="note-row"><b>${label}:</b> ${esc(c.notes[k])}</div>`).join("");
+  const mistakes = (c.mistakes || []).map((m) =>
+    `<div class="mistake"><span class="wrong">${esc(m.wrong)}</span> → <span class="right">${esc(m.correct)}</span>
+     ${m.note ? `<div class="note">${esc(m.note)}</div>` : ""}</div>`).join("");
+  const words = c.words != null ? ` · ${c.words} so'z` : "";
+  return `<div class="card">
+    <div class="card-head"><b>${esc(c.name)}</b><span class="band">${esc(c.band)} / ${esc(c.max)}</span></div>
+    <div class="note">${esc(c.label)}${esc(words)}</div>
+    ${c.reason ? `<div class="reason">${esc(c.reason)}</div>` : ""}
+    ${notes}
+    ${mistakes ? `<div class="sub">Xatolar (${c.mistakes.length})</div>${mistakes}` : ""}
+  </div>`;
+}
+
+function showResult(r) {
+  haptic("success");
+  $("resTitle").textContent = `${exam.title} • ${exam.part_name}`;
+  if (r.total != null) {
+    $("resScore").textContent = r.total;
+    $("resMax").textContent = ` / ${r.max_total || 75}`;
+    $("resLevel").textContent = r.level;
+    $("resRaw").textContent = `Ekspert bahosi: ${r.raw} / ${r.max_raw} → standart ball (rasmiy jadval)`;
+  } else {
+    $("resScore").textContent = r.raw;
+    $("resMax").textContent = ` / ${r.max_raw}`;
+    $("resLevel").textContent = r.level;
+    $("resRaw").textContent = "Rasmiy mezon bo'yicha ekspert bahosi";
+  }
+  if (r.elapsed_sec) {
+    $("resRaw").textContent += ` · ⏱ ${Math.max(1, Math.round(r.elapsed_sec / 60))} daqiqa`;
+  }
+  $("resComponents").innerHTML = (r.components || []).map(componentCard).join("");
+  const tips = r.tips || [];
+  $("resTipsWrap").hidden = !tips.length;
+  $("resTips").innerHTML = tips.map((t) => `<li>${esc(t)}</li>`).join("");
+  show("result");
+}
+
+$("closeBtn").onclick = () => tg?.close();
+load();
+</script>
+</body>
+</html>

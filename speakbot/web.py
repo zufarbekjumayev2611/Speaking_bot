@@ -1,10 +1,14 @@
-"""Mini app backend: sahifani beradi, audio qabul qiladi, transkripsiya va baholashni boshqaradi."""
+"""Mini app backend: sahifalarni beradi, audio qabul qiladi, transkripsiya va baholashni boshqaradi.
+
+/          - Konuşma (speaking) imtihoni: savollar, ovoz yozish, baholash
+/writing   - Yazma (writing) imtihon rejimi: taymer, so'z hisoblagich, turkcha harflar, baholash"""
 import hashlib
 import hmac
 import json
 import logging
 import os
 import time
+from collections import OrderedDict
 from urllib.parse import parse_qsl
 
 from aiogram import Bot
@@ -16,15 +20,18 @@ import stt
 import html
 
 import plans
+import writing
 from access import check_access, get_plan
-from config import BOT_TOKEN, EXAM_LANGUAGE, GRADER_PROVIDER, all_admin_ids
+from config import BOT_TOKEN, EXAM_LANGUAGE
 from languages import LANGUAGES
 from parts import part_info
 
 WEBAPP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webapp")
 MAX_AUDIO_BYTES = 15 * 1024 * 1024
 INIT_DATA_MAX_AGE = 24 * 3600
+PHOTO_CACHE_SIZE = 200
 
+LANG = LANGUAGES[EXAM_LANGUAGE]
 log = logging.getLogger("web")
 
 
@@ -57,20 +64,48 @@ def _user_or_401(request: web.Request) -> dict:
     return user
 
 
+def _full_name(user: dict) -> str:
+    return " ".join(filter(None, [user.get("first_name"), user.get("last_name")]))
+
+
 def _error(status: int, message: str):
     return web.json_response({"error": message}, status=status)
 
 
-# ---------- Sahifa ----------
+# ---------- Sahifalar ----------
 
-async def index(request: web.Request):
-    return web.FileResponse(
-        os.path.join(WEBAPP_DIR, "index.html"),
-        headers={"Cache-Control": "no-store"},
-    )
+def _page(name: str):
+    async def handler(request: web.Request):
+        return web.FileResponse(os.path.join(WEBAPP_DIR, name), headers={"Cache-Control": "no-store"})
+    return handler
 
 
-# ---------- API ----------
+# ---------- Rasm (Telegram'dan olinib, xotirada saqlanadi) ----------
+
+_photo_cache: "OrderedDict[str, bytes]" = OrderedDict()  # file_id -> rasm (rasm almashtirilsa - yangi file_id)
+
+
+async def question_photo(request: web.Request):
+    q = await db.get_question(int(request.match_info["question_id"]))
+    if not q or not q["photo_file_id"]:
+        raise web.HTTPNotFound()
+    file_id = q["photo_file_id"]
+    if file_id not in _photo_cache:
+        bot: Bot = request.app["bot"]
+        file = await bot.get_file(file_id)
+        data = await bot.download_file(file.file_path)
+        _photo_cache[file_id] = data.read()
+        while len(_photo_cache) > PHOTO_CACHE_SIZE:
+            _photo_cache.popitem(last=False)
+    return web.Response(body=_photo_cache[file_id], content_type="image/jpeg", headers={"Cache-Control": "max-age=3600"})
+
+
+def _photo_url(q: dict) -> str | None:
+    # file_id dan qisqa belgi: rasm almashtirilsa brauzer eski rasmni keshdan ko'rsatmaydi
+    return f"/api/photo/{q['id']}?v={hashlib.sha1(q['photo_file_id'].encode()).hexdigest()[:8]}" if q.get("photo_file_id") else None
+
+
+# ---------- Konuşma (speaking) ----------
 
 async def start_exam(request: web.Request):
     user = _user_or_401(request)
@@ -82,47 +117,28 @@ async def start_exam(request: web.Request):
     if not questions:
         return _error(404, "Bu imtihonda hali savol yo'q.")
 
-    await db.save_user(user["id"], " ".join(filter(None, [user.get("first_name"), user.get("last_name")])), user.get("username"))
+    await db.save_user(user["id"], _full_name(user), user.get("username"))
     allowed, reason = await check_access(user["id"])
     if not allowed:
         return _error(403, reason)
     attempt_id = await db.create_attempt(user["id"], exam_id)
+    info = part_info("speaking", exam.get("part"))
+    items, photo = [], None
+    for q in questions:
+        # Part 1.2: rasmlar 4-6-savollar davomida ko'rinib turadi (keyingi savolda rasm bo'lmasa - avvalgisi)
+        photo = _photo_url(q) or (photo if info.get("carry_photo") else None)
+        items.append({"id": q["id"], "text": q["text"], "photo": photo, "prep_sec": q["prep_sec"], "answer_sec": q["answer_sec"]})
     return web.json_response(
         {
             "attempt_id": attempt_id,
             "title": exam["title"],
-            "part_name": part_info("speaking", exam.get("part"))["name"],
-            "flag": LANGUAGES[EXAM_LANGUAGE]["flag"],
-            "section_name": LANGUAGES[EXAM_LANGUAGE]["speaking_name"],
-            "answer_rule": LANGUAGES[EXAM_LANGUAGE]["answer_rule"],
-            "questions": [
-                {
-                    "id": q["id"],
-                    "text": q["text"],
-                    "photo": f"/api/photo/{q['id']}" if q["photo_file_id"] else None,
-                    "prep_sec": q["prep_sec"],
-                    "answer_sec": q["answer_sec"],
-                }
-                for q in questions
-            ],
+            "part_name": info["name"],
+            "flag": LANG["flag"],
+            "section_name": LANG["speaking_name"],
+            "answer_rule": LANG["answer_rule"],
+            "questions": items,
         }
     )
-
-
-_photo_cache: dict[int, bytes] = {}
-
-
-async def question_photo(request: web.Request):
-    question_id = int(request.match_info["question_id"])
-    if question_id not in _photo_cache:
-        q = await db.get_question(question_id)
-        if not q or not q["photo_file_id"]:
-            raise web.HTTPNotFound()
-        bot: Bot = request.app["bot"]
-        file = await bot.get_file(q["photo_file_id"])
-        data = await bot.download_file(file.file_path)
-        _photo_cache[question_id] = data.read()
-    return web.Response(body=_photo_cache[question_id], content_type="image/jpeg", headers={"Cache-Control": "max-age=3600"})
 
 
 async def _own_attempt(user: dict, attempt_id: int):
@@ -130,6 +146,9 @@ async def _own_attempt(user: dict, attempt_id: int):
     if not attempt or attempt["telegram_id"] != user["id"]:
         return None
     return attempt
+
+
+_grading: set[int] = set()  # hozir baholanayotgan urinishlar - bitta urinish ikki marta baholanmasin
 
 
 async def upload_answer(request: web.Request):
@@ -140,12 +159,15 @@ async def upload_answer(request: web.Request):
         question_id = int(form["question_id"])
         audio_field = form["audio"]
         duration = max(0.0, min(float(form.get("duration") or 0), 600.0))
-    except (KeyError, ValueError):
+    except (KeyError, ValueError, TypeError):
         return _error(400, "So'rov noto'g'ri.")
 
     attempt = await _own_attempt(user, attempt_id)
-    if not attempt or attempt["status"] != "in_progress":
+    if not attempt or attempt["status"] != "in_progress" or attempt_id in _grading:
         return _error(403, "Bu urinish yakunlangan yoki sizga tegishli emas.")
+    question = await db.get_question(question_id)
+    if not question or question["exam_id"] != attempt["exam_id"]:
+        return _error(400, "Savol bu imtihonga tegishli emas.")
 
     audio = audio_field.file.read()
     if len(audio) > MAX_AUDIO_BYTES:
@@ -165,64 +187,141 @@ async def upload_answer(request: web.Request):
 
 async def finish_exam(request: web.Request):
     user = _user_or_401(request)
-    body = await request.json()
-    attempt = await _own_attempt(user, int(body.get("attempt_id", 0)))
+    try:
+        body = await request.json()
+        attempt_id = int(body.get("attempt_id", 0))
+    except (ValueError, TypeError, AttributeError):
+        return _error(400, "So'rov noto'g'ri.")
+    attempt = await _own_attempt(user, attempt_id)
     if not attempt:
         return _error(403, "Urinish topilmadi.")
     if attempt["status"] == "done":
         return web.json_response(json.loads(attempt["result_json"]))
-
-    answers = await db.get_answers(attempt["id"])
-    if not answers:
-        return _error(400, "Hech bir javob yozib olinmadi.")
+    if attempt_id in _grading:
+        return _error(409, "Javoblaringiz hozir baholanmoqda — bir oz kutib, «Qayta urinish»ni bosing.")
 
     bot: Bot = request.app["bot"]
-    exam = await db.get_exam(attempt["exam_id"])
-    part = exam.get("part") if exam else None
+    _grading.add(attempt_id)  # tekshiruv va belgilash orasida await yo'q - ikkinchi so'rov 409 oladi
     try:
+        attempt = await db.get_attempt(attempt_id)  # kutish paytida boshqa so'rov baholab bo'lgan bo'lishi mumkin
+        if attempt["status"] == "done":
+            return web.json_response(json.loads(attempt["result_json"]))
+        answers = await db.get_answers(attempt_id)
+        if not answers:
+            return _error(400, "Hech bir javob yozib olinmadi.")
+        # Imtihon davomida limit tugagan bo'lishi mumkin (masalan, bir vaqtda bir nechta imtihon ochilgan)
+        allowed, reason = await check_access(user["id"])
+        if not allowed:
+            return _error(403, reason)
+        exam = await db.get_exam(attempt["exam_id"])
+        part = exam.get("part") if exam else None
         result = await grader.grade_speaking(answers, part, plans.raters_for(await get_plan(user["id"])))
+        await db.finish_attempt(attempt_id, result["total"], result["level"], result, result["raw"])
     except Exception as e:
-        log.exception("Baholash xatosi (attempt %s)", attempt["id"])
+        log.exception("Baholash xatosi (attempt %s)", attempt_id)
         if getattr(e, "status", None) == 429:
             # Groq bepul rejasi limiti (daqiqalik yoki kunlik) - biroz kutish kerak.
             return _error(503, "Hozir baholash navbati band. Javoblaringiz saqlandi - "
                                "1-2 daqiqadan keyin «Qayta urinish»ni bosing.")
-        if getattr(e, "status", None) in (401, 403):
-            for admin_id in all_admin_ids():
-                try:
-                    await bot.send_message(admin_id, f"⚠️ Baholovchi ({GRADER_PROVIDER}) kaliti ishlamayapti - imtihonlar baholanmayapti.")
-                except Exception:
-                    pass
+        await grader.report_key_problem(bot, e)
         return _error(503, "Baholashda xatolik bo'ldi. Bir daqiqadan keyin «Qayta urinish»ni bosing.")
-
-    await db.finish_attempt(attempt["id"], result["total"], result["level"], result, result["raw"])
+    finally:
+        _grading.discard(attempt_id)
 
     title = exam["title"] if exam else "Imtihon"
     try:
-        await bot.send_message(user["id"], grader.result_message(title, result["part_name"], result), parse_mode="HTML")
+        await grader.send_long(bot, user["id"], grader.result_message(title, result["part_name"], result))
     except Exception:
         log.exception("Natijani o'quvchiga yuborib bo'lmadi")
     name = html.escape(user.get("first_name", "?"))
-    for admin_id in all_admin_ids():
-        try:
-            await bot.send_message(
-                admin_id,
-                f"📥 🎙 {name} (<code>{user['id']}</code>) — {html.escape(title)}: "
-                f"<b>{float(result['raw']):g}/{result['max_raw']}</b> ({html.escape(result['level'])})",
-                parse_mode="HTML",
-            )
-        except Exception:
-            pass
+    await grader.notify_admins(
+        bot,
+        f"📥 🎙 {name} (<code>{user['id']}</code>) — {html.escape(title)}: "
+        f"<b>{float(result['raw']):g}/{result['max_raw']}</b> ({html.escape(result['level'])})",
+    )
+    return web.json_response(result)
+
+
+# ---------- Yazma (writing) - imtihon rejimi ----------
+
+async def _writing_exam(exam_id: int) -> tuple[dict | None, dict | None, dict]:
+    """(mavzu, topshiriq qatori, maydonlar) - mavzu ochiq va topshirig'i to'liq bo'lsagina."""
+    exam = await db.get_exam(exam_id)
+    if not exam or not exam["is_active"] or exam.get("kind") != "writing":
+        return None, None, {}
+    row = await db.get_writing_task(exam_id)
+    values = writing.task_values(exam.get("part"), row)
+    if not row or writing.missing_fields(exam.get("part"), values):
+        return None, None, {}
+    return exam, row, values
+
+
+async def start_writing(request: web.Request):
+    user = _user_or_401(request)
+    exam, row, values = await _writing_exam(int(request.match_info["exam_id"]))
+    if not exam:
+        return _error(404, "Bu mavzu hozir yopiq.")
+    await db.save_user(user["id"], _full_name(user), user.get("username"))
+    allowed, reason = await check_access(user["id"])
+    if not allowed:
+        return _error(403, reason)
+    part = exam.get("part")
+    info = part_info("writing", part)
+    return web.json_response(
+        {
+            "exam_id": exam["id"],
+            "title": exam["title"],
+            "part_name": info["name"],
+            "time_min": info.get("time") or 60,
+            "flag": LANG["flag"],
+            "section_name": LANG["writing_name"],
+            "lang_name": LANG["name_uz"],
+            "special_chars": LANG.get("special_chars", ""),
+            "photo": _photo_url(row),
+            "components": writing.component_payload(part, values),
+        }
+    )
+
+
+async def submit_writing(request: web.Request):
+    user = _user_or_401(request)
+    try:
+        body = await request.json()
+        exam_id = int(body.get("exam_id", 0))
+        texts = body.get("texts") or {}
+        elapsed = max(0, min(int(float(body.get("elapsed_sec") or 0)), 24 * 3600))
+        if not isinstance(texts, dict):
+            raise ValueError
+    except (ValueError, TypeError, AttributeError):
+        return _error(400, "So'rov noto'g'ri.")
+
+    exam = await db.get_exam(exam_id)
+    if not exam or exam.get("kind") != "writing":
+        return _error(404, "Mavzu topilmadi.")
+    bot: Bot = request.app["bot"]
+    texts = {str(k): str(v or "") for k, v in texts.items()}
+    try:
+        result, _ = await writing.grade_and_store(bot, user["id"], _full_name(user) or "?", exam, texts, elapsed)
+    except writing.WritingDenied as denied:
+        return _error(403, str(denied))
+    except Exception as e:
+        if getattr(e, "status", None) == 429:
+            return _error(503, "Hozir tekshirish navbati band. Matnlaringiz saqlangan — 1–2 daqiqadan keyin "
+                               "«Qayta urinish»ni bosing.")
+        return _error(503, "Tekshirishda xatolik bo'ldi. Matnlaringiz saqlangan — birozdan keyin «Qayta urinish»ni bosing.")
     return web.json_response(result)
 
 
 def create_app(bot: Bot) -> web.Application:
     app = web.Application(client_max_size=MAX_AUDIO_BYTES + 1024 * 1024)
     app["bot"] = bot
-    app.router.add_get("/", index)
+    app.router.add_get("/", _page("index.html"))
+    app.router.add_get("/writing", _page("writing.html"))
     app.router.add_get("/health", lambda r: web.Response(text="ok"))
-    app.router.add_get("/api/exam/{exam_id}", start_exam)
-    app.router.add_get("/api/photo/{question_id}", question_photo)
+    app.router.add_get(r"/api/exam/{exam_id:\d+}", start_exam)
+    app.router.add_get(r"/api/photo/{question_id:\d+}", question_photo)
     app.router.add_post("/api/answer", upload_answer)
     app.router.add_post("/api/finish", finish_exam)
+    app.router.add_get(r"/api/wexam/{exam_id:\d+}", start_writing)
+    app.router.add_post("/api/wsubmit", submit_writing)
     return app

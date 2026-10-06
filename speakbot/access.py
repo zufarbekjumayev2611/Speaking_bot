@@ -26,5 +26,6 @@ async def check_access(user_id: int) -> tuple[bool, str]:
     used = await db.count_checks_month(user_id)
     if used < limit:
         return True, ""
-    upsell = "«💎 Premium» bo'limida Pro tarifni ko'ring." if plan == "standard" else "«💎 Premium» bo'limida tariflarni ko'ring."
+    upsell = ("«🚀 Tarifni yaxshilash» bo'limida Pro tarifni ko'ring." if plan == "standard"
+              else "«🚀 Tarifni yaxshilash» bo'limida tariflarni ko'ring.")
     return False, f"Bu oylik limit tugadi ({used}/{limit}). Limit keyingi oy 1-sanada yangilanadi. {upsell}"
