@@ -139,6 +139,12 @@ async def menu_premium(message: Message, state: FSMContext):
     await premium_info(message, state)
 
 
+@router.message(Command("status"))
+async def menu_status(message: Message):
+    from ops import status  # ops bot.py'ni import qiladi - aylana importdan qochish uchun shu yerda
+    await status(message)
+
+
 @router.message(F.text == BTN_ADMIN)
 @router.message(Command("admin"))
 async def menu_admin(message: Message, state: FSMContext):
@@ -148,6 +154,12 @@ async def menu_admin(message: Message, state: FSMContext):
         return await message.answer("Bo'limni tanlang 👇", reply_markup=main_keyboard(message.from_user.id))
     text, kb = await _admin_panel_view()
     await message.answer(text, parse_mode="HTML", reply_markup=kb)
+
+
+@router.message(F.text.startswith("/"))
+async def unknown_command(message: Message):
+    """Noma'lum buyruq hech qachon nom / matn / izoh sifatida saqlanib qolmasin."""
+    await message.answer("Bunday buyruq yo'q. Joriy amalni bekor qilish: /cancel, bosh menyu: /start")
 
 
 async def _student_exams(kind: str, part: str | None) -> list[dict]:

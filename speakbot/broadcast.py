@@ -8,6 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+import config
 import db
 import plans
 from config import is_admin
@@ -76,6 +77,7 @@ async def bc_audience(callback: CallbackQuery, state: FSMContext):
 @router.message(Broadcast.text)
 async def bc_text(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
+        await state.clear()
         return
     text = (message.text or "").strip()
     if not text:
@@ -83,27 +85,32 @@ async def bc_text(message: Message, state: FSMContext):
     if len(text) > 3500:
         return await message.answer(f"Matn juda uzun ({len(text)} belgi). 3500 belgidan oshmasin.")
     data = await state.get_data()
+    if data.get("audience") not in AUDIENCES:
+        await state.clear()
+        return await message.answer("Jarayon uzilib qolgan. «📣 Xabar yuborish» bo'limidan qaytadan boshlang.")
     count = len(await db.broadcast_ids(data["audience"]))
-    await state.update_data(text=text)
-    await message.answer(
+    preview = await message.answer(
         f"👀 <b>Ko'rinishi:</b>\n\n{_esc(text)}\n\n— — —\n{AUDIENCES[data['audience']]}: <b>{count}</b> kishiga yuboriladi. Tasdiqlaysizmi?",
         parse_mode="HTML",
         reply_markup=_kb([[_btn("✅ Yuborish", "bc_go"), _btn("❌ Bekor qilish", "admin")]]),
     )
+    await state.update_data(bc_text=text, bc_msg=preview.message_id)
 
 
 def _esc(s: str) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-@router.callback_query(F.data == "bc_go")
+@router.callback_query(Broadcast.text, F.data == "bc_go")
 async def bc_go(callback: CallbackQuery, state: FSMContext):
     global _running
     if not is_admin(callback.from_user.id):
         return await callback.answer()
     data = await state.get_data()
-    if not data.get("text"):
-        return await callback.answer("Xabar topilmadi.", show_alert=True)
+    if not data.get("bc_text") or data.get("audience") not in AUDIENCES:
+        return await callback.answer("Xabar topilmadi. Qaytadan boshlang.", show_alert=True)
+    if data.get("bc_msg") != callback.message.message_id:
+        return await callback.answer("Bu eski ko'rinish. Eng oxirgi ko'rinishdagi «✅ Yuborish»ni bosing.", show_alert=True)
     if _running:
         return await callback.answer("Oldingi xabar hali yuborilmoqda.", show_alert=True)
     await state.clear()
@@ -111,7 +118,7 @@ async def bc_go(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text(f"📤 Yuborish boshlandi: {len(ids)} kishi. Tugagach natijani yozaman.")
     await callback.answer()
     _running = True
-    asyncio.create_task(_send_all(callback.bot, callback.from_user.id, ids, data["text"]))
+    asyncio.create_task(_send_all(callback.bot, callback.from_user.id, ids, data["bc_text"]))
 
 
 async def _send_all(bot, admin_id: int, ids: list[int], text: str):
@@ -148,6 +155,9 @@ async def reminder_loop(bot):
     while True:
         try:
             for r in await db.due_reminders(3):
+                if r["telegram_id"] in config.BLOCKED_IDS:
+                    await db.mark_reminded(r["telegram_id"], r["until"])
+                    continue
                 try:
                     await bot.send_message(
                         r["telegram_id"],

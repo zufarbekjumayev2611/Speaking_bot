@@ -15,9 +15,11 @@ async def get_plan(user_id: int) -> str:
 
 async def check_access(user_id: int) -> tuple[bool, str]:
     """(ruxsat bormi, ruxsat yo'q bo'lsa foydalanuvchiga xabar)."""
+    if is_admin(user_id):
+        return True, ""
     if user_id in config.BLOCKED_IDS:
         return False, "Siz botdan foydalanishdan chetlatilgansiz. Savollar bo'lsa admin bilan bog'laning."
-    if not PREMIUM_ENABLED or is_admin(user_id):
+    if not PREMIUM_ENABLED:
         return True, ""
     plan = await get_plan(user_id)
     limit = plans.limit_for(plan)

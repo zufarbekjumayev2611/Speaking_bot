@@ -503,14 +503,23 @@ async def remove_admin(telegram_id: int):
 
 
 async def find_user(query: str):
-    """Telegram ID (raqam) yoki @username bo'yicha foydalanuvchini topadi."""
+    """Telegram ID (raqam), @username, t.me havola yoki ism bo'yicha foydalanuvchini topadi.
+    "known" - odam botda bormi (ID bo'yicha topilmasa ham ID'ning o'zi qaytariladi, known=False)."""
     q = (query or "").strip()
     if q.lstrip("-").isdigit():
-        return await get_user(int(q)) or {"telegram_id": int(q), "full_name": None, "username": None}
-    q = q.lstrip("@")
+        user = await get_user(int(q))
+        return {**user, "known": True} if user else {"telegram_id": int(q), "full_name": None, "username": None, "known": False}
+    for prefix in ("https://t.me/", "http://t.me/", "t.me/"):
+        if q.lower().startswith(prefix):
+            q = q[len(prefix):]
+    q = q.strip().lstrip("@").strip("/")
     if not q:
         return None
-    return await _fetchone("SELECT * FROM users WHERE LOWER(username) = LOWER(?)", (q,))
+    user = await _fetchone("SELECT * FROM users WHERE LOWER(username) = LOWER(?)", (q,))
+    if not user:  # ism bo'yicha - faqat bitta odam mos kelsa
+        same = await _fetchall("SELECT * FROM users WHERE LOWER(full_name) LIKE LOWER(?) LIMIT 2", (f"%{q}%",))
+        user = same[0] if len(same) == 1 else None
+    return {**user, "known": True} if user else None
 
 
 # ---------- Premium ----------
@@ -688,7 +697,12 @@ async def load_blocked():
 
 
 async def set_blocked(telegram_id: int, blocked: bool):
-    await _execute("UPDATE users SET blocked = ? WHERE telegram_id = ?", (int(blocked), telegram_id))
+    # botga hali yozmagan odam ham bloklanishi mumkin - qator bo'lmasa yaratiladi
+    await _execute(
+        """INSERT INTO users (telegram_id, blocked) VALUES (?, ?)
+           ON CONFLICT(telegram_id) DO UPDATE SET blocked = excluded.blocked""",
+        (telegram_id, int(blocked)),
+    )
     await load_blocked()
 
 
