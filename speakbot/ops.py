@@ -11,6 +11,7 @@
 import asyncio
 import logging
 import os
+import re
 import socket
 import time
 
@@ -21,7 +22,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, ErrorEvent, Message
 
 import db
-from config import WEBAPP_URL, all_admin_ids, is_admin
+import config
+from config import WEBAPP_URL, WEBAPP_URL_ENV, WEBAPP_URL_IGNORED, all_admin_ids, is_admin
 
 log = logging.getLogger("ops")
 
@@ -31,11 +33,26 @@ VERSION = (os.getenv("RENDER_GIT_COMMIT") or "")[:7] or "lokal"
 TOUCH_EVERY = 1800  # foydalanuvchi ma'lumotini bazada yangilash oralig'i (s)
 
 
+def warnings() -> list[str]:
+    """Render sozlamalaridagi xavfli holatlar (ikki bot, ma'lumot o'chishi)."""
+    out = []
+    if WEBAPP_URL_IGNORED:
+        out.append(f"⚠️ Render'dagi WEBAPP_URL (<code>{WEBAPP_URL_ENV}</code>) bu servisning manzili emas — e'tiborsiz "
+                   "qoldirildi. U eski servisga qarab qolgan bo'lsa, eski servisni o'chiring va WEBAPP_URL ni olib tashlang.")
+    if os.getenv("RENDER") and db.backend_name().startswith("SQLite"):
+        parent = os.path.dirname(os.path.abspath(config.DB_PATH))
+        if not os.path.ismount(parent):
+            out.append("⚠️ Turso ulanmagan va disk yo'q: ma'lumotlar har deploy/restartda O'CHADI. Render → Environment'da "
+                       "TURSO_DATABASE_URL va TURSO_AUTH_TOKEN nomlarini tekshiring.")
+    if not config.ADMIN_IDS:
+        out.append("⚠️ ADMIN_IDS bo'sh — asosiy admin yo'q.")
+    return out
+
+
 def instance_line() -> str:
-    own = os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
-    url_note = " ⚠️ bu servisning o'z manzili emas!" if own and WEBAPP_URL != own else ""
-    return (f"Server: <code>{INSTANCE}</code> • versiya: <code>{VERSION}</code> • baza: <b>{db.backend_name()}</b>\n"
-            f"Mini app: <code>{WEBAPP_URL}</code>{url_note}")
+    lines = [f"Server: <code>{INSTANCE}</code> • versiya: <code>{VERSION}</code> • baza: <b>{db.backend_name()}</b>",
+             f"Mini app: <code>{WEBAPP_URL}</code> • adminlar: <code>{', '.join(map(str, config.ADMIN_IDS)) or '-'}</code>"]
+    return "\n".join(lines + warnings())
 
 
 async def _notify_admins(bot, text: str):
@@ -82,7 +99,10 @@ async def on_error(event: ErrorEvent):
     text = "⚠️ Xatolik yuz berdi. Qayta urinib ko'ring yoki /start bosing."
     try:
         if cq:
-            await cq.answer(text, show_alert=True)
+            try:
+                await cq.answer(text, show_alert=True)
+            except Exception:  # so'rov allaqachon javob olgan yoki eskirgan - oddiy xabar bilan aytamiz
+                await cq.bot.send_message(cq.from_user.id, text)
         elif msg and msg.chat.type == "private":
             await msg.answer(text)
     except Exception:
@@ -136,18 +156,28 @@ async def unknown_message(message: Message, state: FSMContext):
 # ---------------------------------------------------------------- ikkinchi nusxa (TelegramConflictError)
 
 class ConflictWatcher(logging.Handler):
-    """aiogram "Failed to fetch updates - TelegramConflictError" deb yozsa - adminlarga xabar (soatiga 1 marta)."""
+    """aiogram "Failed to fetch updates - TelegramConflictError" takrorlansa - adminlarga xabar (soatiga 1 marta).
+    Deploy paytidagi qisqa ustma-ustlik (eski nusxa hali to'xtamagan) hisobga olinmaydi."""
+
+    GRACE = 120      # ishga tushgandan keyingi soniyalar - deploy ustma-ustligi
+    WINDOW = 300     # shu oraliqda
+    REPEATS = 3      # kamida shuncha conflict bo'lsa - haqiqiy ikkinchi nusxa
 
     def __init__(self, bot):
         super().__init__(level=logging.ERROR)
         self.bot = bot
         self.last = 0.0
+        self.hits: list[float] = []
 
     def emit(self, record: logging.LogRecord):
         try:
-            if "TelegramConflictError" not in record.getMessage() or time.time() - self.last < 3600:
+            now = time.time()
+            if "TelegramConflictError" not in record.getMessage() or now - STARTED < self.GRACE:
                 return
-            self.last = time.time()
+            self.hits = [t for t in self.hits if now - t < self.WINDOW] + [now]
+            if len(self.hits) < self.REPEATS or now - self.last < 3600:
+                return
+            self.last = now
             asyncio.get_running_loop().create_task(_notify_admins(
                 self.bot,
                 "⚠️ <b>Bot ikki joyda ishga tushirilgan!</b>\nShu token bilan boshqa joyda ham bot ishlayapti "
@@ -160,7 +190,29 @@ class ConflictWatcher(logging.Handler):
 
 
 async def startup(bot):
+    for w in warnings():
+        log.error(re.sub(r"<[^>]+>", "", w))
     await _notify_admins(bot, f"🟢 <b>Bot ishga tushdi</b>\n{instance_line()}\nTekshirish: /status")
+
+
+async def refresh_loop():
+    """Adminlar, bloklanganlar va sozlamalar har daqiqada bazadan qayta o'qiladi
+    (masalan, Turso panelida qo'lda o'zgartirilsa - qayta ishga tushirish shart emas)."""
+    while True:
+        await asyncio.sleep(60)
+        try:
+            await db.load_admins()
+            await db.load_blocked()
+            await db.load_settings()
+        except Exception:
+            log.warning("Keshlarni yangilab bo'lmadi", exc_info=True)
+
+
+async def drain_background(timeout: float = 25):
+    """Bot to'xtayotganda fonda ketayotgan yazma tekshiruvlarini biroz kutadi."""
+    from bot import _background
+    if _background:
+        await asyncio.wait(list(_background), timeout=timeout)
 
 
 def setup(dp: Dispatcher, bot):

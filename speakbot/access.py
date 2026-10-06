@@ -41,7 +41,11 @@ async def acquire_check(user_id: int) -> tuple[bool, str]:
     """Tekshiruvni boshlashdan oldin: joy band qilinadi (await'dan OLDIN), keyin limit tekshiriladi.
     Ruxsat berilsa, tekshiruv tugagach release_check() chaqirilishi shart."""
     _pending[user_id] = _pending.get(user_id, 0) + 1
-    allowed, reason = await check_access(user_id, _extra=1)
+    try:
+        allowed, reason = await check_access(user_id, _extra=1)
+    except BaseException:
+        release_check(user_id)
+        raise
     if not allowed:
         release_check(user_id)
     return allowed, reason

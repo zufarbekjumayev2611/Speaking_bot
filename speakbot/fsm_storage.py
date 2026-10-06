@@ -4,12 +4,25 @@ Avval holat faqat xotirada edi (MemoryStorage): Render qayta ishga tushganda (de
 u o'chib ketar va «⭐ 45 s», «✅ Shunday yuborish», «30 kun» kabi tugmalar hech narsa qilmay qolardi.
 Endi holat bazada (Turso yoki SQLite) turadi; tezlik uchun xotirada ham nusxasi saqlanadi."""
 import json
+import time
+from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from aiogram.fsm.state import State
 from aiogram.fsm.storage.base import BaseStorage, StorageKey
 
 import db
+
+
+TTL = 12 * 3600  # 12 soatdan beri tegilmagan yarim qolgan amal unutiladi (keyingi xabar eski amalga ketmasin)
+
+
+def _age(updated_at: str | None) -> float:
+    try:
+        dt = datetime.strptime(updated_at, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        return time.time() - dt.timestamp()
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _key(k: StorageKey) -> str:
@@ -19,25 +32,33 @@ def _key(k: StorageKey) -> str:
 class DbStorage(BaseStorage):
     def __init__(self):
         self._cache: dict[str, tuple[str | None, dict]] = {}
+        self._touched: dict[str, float] = {}
 
     async def _load(self, key: StorageKey) -> tuple[str, tuple[str | None, dict]]:
         k = _key(key)
+        if k in self._cache and time.time() - self._touched.get(k, 0) > TTL and self._cache[k] != (None, {}):
+            await self._save(k, None, {})  # eskirgan
         if k not in self._cache:
             row = await db.fsm_get(k)
-            data = {}
-            if row and row.get("data"):
-                try:
-                    data = json.loads(row["data"])
-                except ValueError:
-                    data = {}
-            self._cache[k] = (row.get("state") if row else None, data if isinstance(data, dict) else {})
+            state, data = (row.get("state"), row.get("data")) if row else (None, None)
+            try:
+                data = json.loads(data) if data else {}
+            except ValueError:
+                data = {}
+            if row and _age(row.get("updated_at")) > TTL:
+                state, data = None, {}
+                await db.fsm_set(k, None, "")
+            self._cache[k] = (state, data if isinstance(data, dict) else {})
+            self._touched[k] = time.time()
         return k, self._cache[k]
 
     async def _save(self, k: str, state: str | None, data: dict):
         if self._cache.get(k) == (state, data):
             return  # o'zgarmagan (masalan, bo'sh holatni yana tozalash) - bazaga murojaat shart emas
-        self._cache[k] = (state, data)
+        self._cache.pop(k, None)  # bazaga yozilmasa - keyingi safar bazadan qayta o'qiladi
         await db.fsm_set(k, state, json.dumps(data, ensure_ascii=False, default=str) if data else "")
+        self._cache[k] = (state, data)
+        self._touched[k] = time.time()
 
     async def set_state(self, key: StorageKey, state: State | str | None = None) -> None:
         k, (_, data) = await self._load(key)

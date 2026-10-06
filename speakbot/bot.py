@@ -539,8 +539,17 @@ async def writing_answer_waiting(message: Message, state: FSMContext):
         await state.clear()
         return await message.answer(f"{WRITING_NAME} bekor qilindi. Bo'limni qaytadan tanlang.",
                                     reply_markup=main_keyboard(message.from_user.id))
-    await message.answer("Ishingiz qabul qilingan. Tekshirish tugashini kuting yoki «🔁 Qayta tekshirish»ni bosing. "
-                         "Bekor qilish: /cancel")
+    exam_id = (await state.get_data()).get("exam_id")
+    if (message.from_user.id, exam_id) in writing._inflight:
+        return await message.answer("⏳ Ishingiz hozir tekshirilmoqda — natijani bir oz kuting. Bekor qilish: /cancel")
+    # tekshiruv ketmayapti (masalan, bot qayta ishga tushdi) - matnlar saqlangan, qayta tekshirish taklif qilinadi
+    await message.answer(
+        "Ishingiz qabul qilingan, lekin tekshiruv tugallanmagan. «🔁 Qayta tekshirish»ni bosing.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔁 Qayta tekshirish", callback_data="wa_retry")],
+            [InlineKeyboardButton(text="❌ Bekor qilish", callback_data="wr_cancel")],
+        ]),
+    )
 
 
 @router.message(WritingAnswer.text)

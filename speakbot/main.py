@@ -63,9 +63,11 @@ async def main():
     asyncio.create_task(reminder_loop(bot))
     await bot.delete_webhook(drop_pending_updates=False)
     await ops.startup(bot)
+    asyncio.create_task(ops.refresh_loop())
     try:
         await dp.start_polling(bot)
     finally:
+        await ops.drain_background()  # deploy paytida boshlangan yazma tekshiruvlari tugasin
         await close_session()
         await db.close_db()
 

@@ -286,6 +286,9 @@ async def _execute(sql, params=()) -> int:
 # ---------- Foydalanuvchilar ----------
 
 async def save_user(telegram_id: int, full_name: str, username: str | None):
+    if username:  # Telegram'da username boshqa odamga o'tgan bo'lishi mumkin - qidiruv adashmasin
+        await _execute("UPDATE users SET username = NULL WHERE LOWER(username) = LOWER(?) AND telegram_id != ?",
+                       (username, telegram_id))
     await _execute(
         """INSERT INTO users (telegram_id, full_name, username) VALUES (?, ?, ?)
            ON CONFLICT(telegram_id) DO UPDATE SET full_name = excluded.full_name, username = excluded.username""",
@@ -530,8 +533,10 @@ async def find_user(query: str):
     if not q:
         return None
     user = await _fetchone("SELECT * FROM users WHERE LOWER(username) = LOWER(?)", (q,))
-    if not user:  # ism bo'yicha - faqat bitta odam mos kelsa
-        same = await _fetchall("SELECT * FROM users WHERE LOWER(full_name) LIKE LOWER(?) LIMIT 2", (f"%{q}%",))
+    if not user:  # ism bo'yicha (kirill, turkcha harflar ham) - faqat bitta odam mos kelsa
+        needle = q.casefold()
+        same = [u for u in await _fetchall("SELECT * FROM users WHERE full_name IS NOT NULL")
+                if needle in u["full_name"].casefold()]
         user = same[0] if len(same) == 1 else None
     return {**user, "known": True} if user else None
 
@@ -653,9 +658,10 @@ async def count_checks_month(telegram_id: int) -> int:
 async def get_stats() -> dict:
     row = await _fetchone(
         """SELECT
-             (SELECT COUNT(*) FROM users) AS users,
-             (SELECT COUNT(*) FROM users WHERE date(joined_at, '+5 hours') = date('now', '+5 hours')) AS new_today,
-             (SELECT COUNT(*) FROM users WHERE joined_at >= datetime('now', '-7 days')) AS new_week,
+             (SELECT COUNT(*) FROM users WHERE full_name IS NOT NULL) AS users,
+             (SELECT COUNT(*) FROM users WHERE full_name IS NOT NULL
+                AND date(joined_at, '+5 hours') = date('now', '+5 hours')) AS new_today,
+             (SELECT COUNT(*) FROM users WHERE full_name IS NOT NULL AND joined_at >= datetime('now', '-7 days')) AS new_week,
              (SELECT COUNT(*) FROM users WHERE COALESCE(blocked, 0) = 1) AS blocked,
              (SELECT COUNT(*) FROM attempts WHERE status = 'done') AS speaking,
              (SELECT COUNT(*) FROM writing_submissions WHERE status = 'done') AS writing,
@@ -725,7 +731,8 @@ async def set_blocked(telegram_id: int, blocked: bool):
 async def broadcast_ids(audience: str) -> list[int]:
     """audience: all | free | standard | pro | premium"""
     now = _now().strftime(_FMT)
-    base = "SELECT u.telegram_id FROM users u LEFT JOIN premium p ON p.telegram_id = u.telegram_id AND p.until > ? WHERE COALESCE(u.blocked, 0) = 0"
+    base = ("SELECT u.telegram_id FROM users u LEFT JOIN premium p ON p.telegram_id = u.telegram_id AND p.until > ? "
+            "WHERE COALESCE(u.blocked, 0) = 0 AND u.full_name IS NOT NULL")  # botga yozmagan (faqat bloklangan) - yo'q
     cond = {
         "all": "",
         "free": " AND p.telegram_id IS NULL",
@@ -772,7 +779,7 @@ async def duplicate_exam(exam_id: int) -> int | None:
 # ---------- Foydalanuvchilar ro'yxati (admin uchun) ----------
 
 async def count_users() -> int:
-    return (await _fetchone("SELECT COUNT(*) AS c FROM users"))["c"]
+    return (await _fetchone("SELECT COUNT(*) AS c FROM users WHERE full_name IS NOT NULL"))["c"]
 
 
 async def list_users(offset: int = 0, limit: int = 8):
@@ -781,6 +788,7 @@ async def list_users(offset: int = 0, limit: int = 8):
         """SELECT u.telegram_id, u.full_name, u.username, u.joined_at,
                   (p.until IS NOT NULL AND p.until > ?) AS is_premium, p.plan AS plan, COALESCE(u.blocked, 0) AS blocked
            FROM users u LEFT JOIN premium p ON p.telegram_id = u.telegram_id
+           WHERE u.full_name IS NOT NULL OR COALESCE(u.blocked, 0) = 1
            ORDER BY u.joined_at DESC, u.telegram_id DESC LIMIT ? OFFSET ?""",
         (_now().strftime(_FMT), limit, offset),
     )
@@ -799,7 +807,7 @@ async def delete_all_exams() -> int:
 # ---------- Bot holati (FSM): ko'p bosqichli amallar qayta ishga tushganda ham davom etadi ----------
 
 async def fsm_get(key: str):
-    return await _fetchone("SELECT state, data FROM fsm_state WHERE key = ?", (key,))
+    return await _fetchone("SELECT state, data, updated_at FROM fsm_state WHERE key = ?", (key,))
 
 
 async def fsm_set(key: str, state: str | None, data: str):

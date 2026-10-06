@@ -4,6 +4,7 @@ Render'da ma'lumotlar o'chib ketmasligi uchun: TURSO_DATABASE_URL (libsql://<baz
 TURSO_AUTH_TOKEN berilsa, bot lokal SQLite fayl o'rniga Turso'dan foydalanadi."""
 import asyncio
 import base64
+import json
 import logging
 
 import aiohttp
@@ -13,6 +14,10 @@ from netclient import get_session
 
 class TursoError(RuntimeError):
     pass
+
+
+class TursoUnavailable(TursoError):
+    """Server vaqtincha javob bermadi (5xx) - qayta urinish mumkin."""
 
 
 def _http_url(url: str) -> str:
@@ -70,7 +75,13 @@ class TursoClient:
         async with get_session().post(
             self.url, json={"requests": reqs}, headers=self.headers, timeout=aiohttp.ClientTimeout(total=30)
         ) as resp:
-            body = await resp.json(content_type=None)
+            raw = await resp.text()
+            if resp.status >= 500:
+                raise TursoUnavailable(f"Turso HTTP {resp.status}: {raw[:300]}")
+            try:
+                body = json.loads(raw)
+            except ValueError:
+                raise TursoError(f"Turso HTTP {resp.status}: javob JSON emas: {raw[:300]}") from None
             if resp.status != 200:
                 raise TursoError(f"Turso HTTP {resp.status}: {str(body)[:300]}")
         out = []
@@ -81,12 +92,14 @@ class TursoClient:
         return out
 
     async def execute(self, sql: str, params=()) -> Result:
-        # O'qish so'rovlari tarmoq uzilishida bir marta qayta yuboriladi (yozishlar - yo'q: ikki marta yozilmasin)
-        retries = 1 if sql.lstrip()[:6].upper() in ("SELECT", "PRAGMA") else 0
+        # Tarmoq uzilishida bir marta qayta yuboriladi - faqat takrorlansa zarari yo'q so'rovlar
+        # (o'qish, UPDATE/DELETE, ON CONFLICT bilan INSERT); oddiy INSERT ikki marta yozilmasin.
+        head = sql.lstrip()[:6].upper()
+        retries = 0 if head == "INSERT" and "ON CONFLICT" not in sql.upper() else 1
         for attempt in range(retries + 1):
             try:
                 return (await self.batch([(sql, tuple(params))]))[0]
-            except (aiohttp.ClientConnectionError, asyncio.TimeoutError):
+            except (aiohttp.ClientConnectionError, asyncio.TimeoutError, TursoUnavailable):
                 if attempt == retries:
                     raise
                 logging.getLogger("turso").warning("Turso bilan aloqa uzildi, qayta urinilmoqda")
