@@ -6,7 +6,8 @@ from datetime import datetime, timedelta, timezone
 import aiosqlite
 
 import config
-from config import DB_PATH
+from config import DB_PATH, TURSO_TOKEN, TURSO_URL
+from turso import TursoClient, TursoError
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS exams (
@@ -139,6 +140,15 @@ async def _get() -> aiosqlite.Connection:
     return _db
 
 
+# Turso sozlangan bo'lsa - ma'lumotlar Turso'da (Render qayta ishga tushganda ham saqlanadi),
+# aks holda lokal SQLite fayl.
+_turso: TursoClient | None = TursoClient(TURSO_URL, TURSO_TOKEN) if TURSO_URL else None
+
+
+def backend_name() -> str:
+    return "Turso" if _turso else f"SQLite ({DB_PATH})"
+
+
 async def close_db():
     global _db
     if _db is not None:
@@ -147,6 +157,20 @@ async def close_db():
 
 
 async def init_db():
+    if _turso:
+        statements = [s.strip() for s in SCHEMA.split(";") if s.strip()]
+        await _turso.batch([(sql, ()) for sql in statements])
+        for sql in _MIGRATIONS:
+            try:
+                await _turso.execute(sql)
+            except TursoError:
+                pass  # ustun allaqachon bor
+        await _turso.batch(
+            [("UPDATE exams SET part = '1' WHERE kind = 'writing' AND part IN ('1.1', '1.2')", ())]
+            + [(sql, ()) for sql in _INDEXES]
+        )
+        await load_settings()
+        return
     db = await _get()
     await db.executescript(SCHEMA)
     for sql in _MIGRATIONS:
@@ -163,6 +187,8 @@ async def init_db():
 
 
 async def _fetchall(sql, params=()):
+    if _turso:
+        return (await _turso.execute(sql, params)).rows
     db = await _get()
     async with db.execute(sql, params) as cur:
         return [dict(r) for r in await cur.fetchall()]
@@ -174,6 +200,8 @@ async def _fetchone(sql, params=()):
 
 
 async def _execute(sql, params=()) -> int:
+    if _turso:
+        return (await _turso.execute(sql, params)).lastrowid
     db = await _get()
     cur = await db.execute(sql, params)
     await db.commit()

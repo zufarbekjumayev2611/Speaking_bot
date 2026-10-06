@@ -16,6 +16,8 @@ Telegram bot: ko'p darajali (multilevel) imtihon uchun Speaking va Writing'ni AI
 | `ADMIN_IDS` | tavsiya | Admin Telegram ID'lari, vergul bilan (ID: @userinfobot) |
 | `EXAM_LANGUAGE` | yo'q | `tr` (standart) yoki `en` |
 | `GRADER_PROVIDER` | yo'q | `groq` (standart) yoki `claude` (`ANTHROPIC_API_KEY` ham kerak) |
+| `TURSO_DATABASE_URL` | tavsiya | `libsql://<baza>.turso.io` — berilsa, ma'lumotlar Turso'da saqlanadi (deploy/restartda o'chmaydi, disk kerak emas) |
+| `TURSO_AUTH_TOKEN` | Turso bilan | Turso token (`turso db tokens create <baza>`) |
 | `DB_PATH` | disk bilan | `/var/data/speakbot.db` (Disk mount: `/var/data`) |
 | `FREE_MONTHLY_LIMIT` | yo'q | Bepul tarif: oyiga tekshiruvlar soni (standart `5`) |
 | `STANDARD_MONTHLY_LIMIT` | yo'q | Standard tarif: oyiga tekshiruvlar soni (standart `30`) |

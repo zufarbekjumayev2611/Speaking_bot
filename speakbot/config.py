@@ -43,6 +43,20 @@ RATERS = max(1, min(3, int(os.getenv("RATERS", "1"))))
 STT_MODEL = os.getenv("STT_MODEL", "whisper-large-v3-turbo")
 
 DB_PATH = os.getenv("DB_PATH", "speakbot.db")
+# Turso (libSQL) - berilsa, ma'lumotlar lokal fayl o'rniga Turso bazasida saqlanadi.
+# Render'da qaysi nom bilan kiritilgan bo'lsa ham topiladi.
+def _first_env(*names: str) -> str:
+    for n in names:
+        v = os.getenv(n, "").strip()
+        if v:
+            return v
+    return ""
+
+
+TURSO_URL = _first_env("TURSO_DATABASE_URL", "TURSO_DB_URL", "TURSO_URL", "LIBSQL_URL", "DATABASE_URL")
+TURSO_TOKEN = _first_env("TURSO_AUTH_TOKEN", "TURSO_TOKEN", "TURSO_DB_TOKEN", "LIBSQL_AUTH_TOKEN", "DATABASE_TOKEN")
+if TURSO_URL and not TURSO_URL.startswith(("libsql://", "https://", "http://", "wss://", "ws://")):
+    TURSO_URL = ""  # masalan postgres:// - Turso emas
 PORT = int(os.getenv("PORT", "8080"))
 
 

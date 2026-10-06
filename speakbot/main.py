@@ -32,6 +32,7 @@ async def keep_alive():
 
 async def main():
     await db.init_db()
+    logging.info("Ma'lumotlar bazasi: %s", db.backend_name())
     await db.load_admins()
     await db.load_blocked()
     bot = Bot(token=BOT_TOKEN)
