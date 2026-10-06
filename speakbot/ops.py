@@ -21,7 +21,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, ErrorEvent, Message
 
 import db
-from config import all_admin_ids, is_admin
+from config import WEBAPP_URL, all_admin_ids, is_admin
 
 log = logging.getLogger("ops")
 
@@ -32,7 +32,10 @@ TOUCH_EVERY = 1800  # foydalanuvchi ma'lumotini bazada yangilash oralig'i (s)
 
 
 def instance_line() -> str:
-    return f"Server: <code>{INSTANCE}</code> • versiya: <code>{VERSION}</code> • baza: <b>{db.backend_name()}</b>"
+    own = os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
+    url_note = " ⚠️ bu servisning o'z manzili emas!" if own and WEBAPP_URL != own else ""
+    return (f"Server: <code>{INSTANCE}</code> • versiya: <code>{VERSION}</code> • baza: <b>{db.backend_name()}</b>\n"
+            f"Mini app: <code>{WEBAPP_URL}</code>{url_note}")
 
 
 async def _notify_admins(bot, text: str):
