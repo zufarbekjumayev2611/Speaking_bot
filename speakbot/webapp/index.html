@@ -145,6 +145,7 @@
     <ul class="rules">
       <li><span>🤫</span><span>Tinch joyda bo'ling va telefonni og'zingizga yaqin tuting.</span></li>
       <li><span>⏳</span><span>Har savoldan oldin tayyorlanish vaqti beriladi, keyin yozuv o'zi boshlanadi.</span></li>
+      <li><span>🔔</span><span>«Tink» signali eshitilganda gapirishni boshlang — xuddi imtihondagidek. Ovozni yoqib qo'ying.</span></li>
       <li><span id="langFlag">🗣</span><span id="langRule">Imtihon tilida, to'liq gaplar bilan javob bering.</span></li>
       <li><span>↩️</span><span>Javobni qayta yozib bo'lmaydi — xuddi haqiqiy imtihondagidek.</span></li>
     </ul>
@@ -183,7 +184,7 @@
     <p class="muted" id="resRaw"></p>
     <p id="resSummary"></p>
     <div class="bars" id="resBars"></div>
-    <div id="resMistakesWrap"><h2>Asosiy xatolar</h2><div id="resMistakes"></div></div>
+    <div id="resMistakesWrap"><h2 id="resMistakesTitle">Xatolar</h2><div id="resMistakes"></div></div>
     <div id="resTipsWrap"><h2>Tavsiyalar</h2><ul class="tips" id="resTips"></ul></div>
     <p class="muted" style="margin-top:20px">Baho Bilimni baholash agentligining rasmiy mezonlari asosida qo'yildi. Talaffuz baholanmaydi. Natija bot chatiga ham yuborildi.</p>
     <button class="btn" id="closeBtn" style="margin-top:8px">Yopish</button>
@@ -225,6 +226,52 @@ function fail(message, retry) {
 }
 
 function haptic(type) { tg?.HapticFeedback?.notificationOccurred?.(type); }
+
+// ---------- «Tink» signali (imtihondagi kabi: gapirish boshlanishidan oldin) ----------
+// Brauzerlar ovozni faqat foydalanuvchi bosgandan keyin ruxsat beradi - shuning uchun AudioContext
+// «Imtihonni boshlash» tugmasi bosilganda yaratiladi va "ochiladi" (iOS uchun jim bufer).
+let audioCtx = null;
+
+function unlockAudio() {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    audioCtx = audioCtx || new AC();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    const src = audioCtx.createBufferSource();
+    src.buffer = audioCtx.createBuffer(1, 1, 22050);
+    src.connect(audioCtx.destination);
+    src.start(0);
+  } catch { audioCtx = null; }
+}
+
+function tink() {
+  return new Promise((resolve) => {
+    try {
+      if (!audioCtx) return resolve();
+      if (audioCtx.state === "suspended") audioCtx.resume();
+      const t = audioCtx.currentTime + 0.02;
+      const out = audioCtx.createGain();
+      out.connect(audioCtx.destination);
+      out.gain.setValueAtTime(0.0001, t);
+      out.gain.exponentialRampToValueAtTime(0.7, t + 0.012);
+      out.gain.exponentialRampToValueAtTime(0.0001, t + 0.55);
+      // asosiy ton + yuqori obertonlar - qo'ng'iroqchaga o'xshash qisqa "tink"
+      [[1318.5, 1], [2637, 0.35], [3955.5, 0.12]].forEach(([freq, level]) => {
+        const osc = audioCtx.createOscillator();
+        const g = audioCtx.createGain();
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(freq, t);
+        g.gain.value = level;
+        osc.connect(g);
+        g.connect(out);
+        osc.start(t);
+        osc.stop(t + 0.6);
+      });
+      setTimeout(resolve, 450);
+    } catch { resolve(); }
+  });
+}
 
 const CIRC = 2 * Math.PI * 54;
 $("arc").style.strokeDasharray = CIRC;
@@ -303,6 +350,7 @@ async function load() {
 
 // ---------- 2. Boshlash ----------
 $("startBtn").onclick = async () => {
+  unlockAudio();
   if (!window.MediaRecorder) {
     return fail("Bu qurilmada ovoz yozish qo'llab-quvvatlanmaydi. Telegram'ni yangilang yoki boshqa telefondan urinib ko'ring.");
   }
@@ -338,13 +386,26 @@ function askQuestion() {
 function prepare(q) {
   $("dial").classList.remove("recording");
   $("dialState").textContent = "tayyorlaning";
+  $("actionBtn").disabled = false;
   $("actionBtn").textContent = "Tayyorman, gapirishni boshlash";
   $("actionBtn").onclick = () => record(q);
   countdown(q.prep_sec, (left) => setDial(left, q.prep_sec), () => record(q));
 }
 
-function record(q) {
+let recordingFor = null;   // shu savol uchun yozuv allaqachon boshlangan (ikki marta bosilmasin)
+
+async function record(q) {
+  if (recordingFor === q) return;
+  recordingFor = q;
   clearInterval(timer);
+  const btn = $("actionBtn");
+  btn.disabled = true;
+  btn.onclick = null;
+  $("dial").classList.add("recording");
+  $("dialState").textContent = "gapiring";
+  setDial(q.answer_sec, q.answer_sec);
+  await tink();             // signal yozuvga tushmasligi uchun yozuv signal tugagach boshlanadi
+
   const mime = pickMime();
   const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
   const chunks = [];
@@ -359,12 +420,12 @@ function record(q) {
   const startedAt = Date.now();
   haptic("success");
 
-  $("dial").classList.add("recording");
   $("dialState").textContent = "yozilmoqda";
-  $("actionBtn").textContent = "Javobni yakunlash";
+  btn.textContent = "Javobni yakunlash";
   let stopped = false;
   const stop = () => { if (!stopped) { stopped = true; clearInterval(timer); recorder.stop(); } };
-  $("actionBtn").onclick = stop;
+  // «Tayyorman» tugmasini tez ikki marta bosish javobni darhol tugatib yubormasin
+  setTimeout(() => { btn.disabled = false; btn.onclick = stop; }, 1200);
   countdown(q.answer_sec, (left) => setDial(left, q.answer_sec), stop);
 }
 
@@ -433,7 +494,8 @@ function showResult(r) {
     .filter(([k]) => notes[k])
     .map(([k, label]) => `<div class="mistake"><b>${label}</b><div class="note">${esc(notes[k])}</div></div>`)
     .join("");
-  const mistakes = r.mistakes || [];
+  const mistakes = c.mistakes || r.mistakes || [];
+  $("resMistakesTitle").textContent = mistakes.length ? `Xatolar (${mistakes.length})` : "Xatolar";
   $("resMistakesWrap").hidden = !mistakes.length;
   $("resMistakes").innerHTML = mistakes.map((m) =>
     `<div class="mistake"><span class="wrong">${esc(m.wrong)}</span> → <span class="right">${esc(m.correct)}</span>

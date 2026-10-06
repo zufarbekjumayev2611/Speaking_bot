@@ -1,6 +1,6 @@
 """Tariflar (Bepul / Standard / Pro) va admin paneli: foydalanuvchilar, premium, adminlar, sozlamalar, statistika.
 
-O'quvchi:  «💎 Premium» - tariflar, joriy tarif va oylik limit, to'lov ma'lumoti.
+O'quvchi:  «🚀 Tarifni yaxshilash» - tariflar, joriy tarif va oylik limit, to'lov ma'lumoti.
 Admin:     👥 Foydalanuvchilar (karta -> premium berish / bloklash), 💎 Premium, 👮 Adminlar,
            ⚙️ Sozlamalar (limitlar, to'lov matni), 📈 Statistika.
 To'lov QO'LDA kiritiladi: admin tarif va muddatni tanlab, to'lov izohini yozadi.
@@ -18,7 +18,6 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 import config
 import db
 import plans
-from access import get_plan
 from config import ADMIN_IDS, PREMIUM_ENABLED, is_admin, is_owner
 
 log = logging.getLogger("premium")
@@ -26,7 +25,8 @@ log = logging.getLogger("premium")
 router = Router()
 router.message.filter(F.chat.type == "private")
 
-BTN_PREMIUM = "💎 Premium"
+BTN_PREMIUM = "🚀 Tarifni yaxshilash"
+OLD_PREMIUM_BUTTONS = {"💎 Premium"}  # eski klaviaturalardagi tugma ham ishlashi uchun
 DEFAULT_INFO = "Obuna narxi va to'lov usullari uchun admin bilan bog'laning."
 DURATIONS = [30, 90, 180, 365]
 INFO_KEY = "premium_info"
@@ -102,11 +102,11 @@ class BlockMiddleware(BaseMiddleware):
 
 
 # ======================================================================
-# O'QUVCHI: «💎 Premium»
+# O'QUVCHI: «🚀 Tarifni yaxshilash»
 # ======================================================================
 
-@router.message(F.text == BTN_PREMIUM)
-@router.message(Command("premium"))
+@router.message(F.text.in_({BTN_PREMIUM} | OLD_PREMIUM_BUTTONS))
+@router.message(Command("premium", "tarif"))
 async def premium_info(message: Message, state: FSMContext):
     await state.clear()
     uid = message.from_user.id
@@ -121,7 +121,8 @@ async def premium_info(message: Message, state: FSMContext):
     limit = plans.limit_for(plan)
     usage = f"{used}/{limit}" if limit is not None else f"{used} (cheksiz)"
     lines = [
-        "💎 <b>Tariflar</b>",
+        "🚀 <b>Tarifni yaxshilash</b>\n",
+        "<b>Tariflar:</b>",
         f"🆓 Bepul — {plans.limit_text('free')} tekshiruv",
         f"⭐ Standard — {plans.limit_text('standard')} tekshiruv",
         f"💎 Pro — {plans.limit_text('pro')} tekshiruv + <b>2 ekspert</b> baholashi (ball aniqroq)",
@@ -380,7 +381,7 @@ async def _settings_view():
     text = (
         "⚙️ <b>Sozlamalar</b>\n\n<b>Oylik tekshiruv limitlari:</b>\n"
         + "\n".join(f"• {e(_limit_line(p))}" for p in plans.PLANS)
-        + f"\n\n<b>To'lov ma'lumoti</b> (o'quvchi «💎 Premium»da ko'radi):\n<i>{e(info)}</i>"
+        + f"\n\n<b>To'lov ma'lumoti</b> (o'quvchi «🚀 Tarifni yaxshilash» bo'limida ko'radi):\n<i>{e(info)}</i>"
     )
     kb = _kb([
         [_btn("✏️ Bepul", "lim:free"), _btn("✏️ Standard", "lim:standard"), _btn("✏️ Pro", "lim:pro")],
@@ -446,7 +447,7 @@ async def info_edit(callback: CallbackQuery, state: FSMContext):
     await state.set_state(PremInfo.text)
     current = await db.get_setting(INFO_KEY, DEFAULT_INFO)
     await callback.message.answer(
-        "📝 <b>To'lov ma'lumoti</b> — o'quvchi «💎 Premium» tugmasini bosganda shu matnni ko'radi "
+        "📝 <b>To'lov ma'lumoti</b> — o'quvchi «🚀 Tarifni yaxshilash» tugmasini bosganda shu matnni ko'radi "
         "(narxlar, karta raqami, admin bilan aloqa va h.k.).\n\n"
         f"Hozirgi matn:\n<i>{e(current)}</i>\n\nYangi matnni yuboring (ko'pi bilan 1000 belgi). "
         "Standart matnga qaytarish uchun «-» yuboring. Bekor qilish: /cancel",

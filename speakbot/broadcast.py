@@ -152,7 +152,7 @@ async def reminder_loop(bot):
                     await bot.send_message(
                         r["telegram_id"],
                         f"⏰ {plans.name(r['plan'])} obunangiz <b>{_local(r['until'])}</b> da tugaydi.\n"
-                        "Davom ettirish uchun «💎 Premium» bo'limiga qarang yoki admin bilan bog'laning.",
+                        "Davom ettirish uchun «🚀 Tarifni yaxshilash» bo'limiga qarang yoki admin bilan bog'laning.",
                         parse_mode="HTML",
                     )
                 except Exception:

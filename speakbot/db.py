@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS questions (
     text TEXT NOT NULL,
     photo_file_id TEXT,
     prep_sec INTEGER DEFAULT 30,
-    answer_sec INTEGER DEFAULT 60
+    answer_sec INTEGER DEFAULT 60,
+    meta TEXT
 );
 CREATE TABLE IF NOT EXISTS users (
     telegram_id INTEGER PRIMARY KEY,
@@ -102,6 +103,7 @@ _MIGRATIONS = [
     "ALTER TABLE premium ADD COLUMN reminded_for TEXT",
     "ALTER TABLE premium_log ADD COLUMN plan TEXT",
     "ALTER TABLE users ADD COLUMN blocked INTEGER DEFAULT 0",
+    "ALTER TABLE questions ADD COLUMN meta TEXT",  # writing topshirig'ining maydonlari (JSON)
 ]
 
 
@@ -244,12 +246,13 @@ async def delete_exam(exam_id: int):
 
 # ---------- Savollar ----------
 
-async def add_question(exam_id: int, text: str, photo_file_id: str | None, prep_sec: int, answer_sec: int) -> int:
+async def add_question(exam_id: int, text: str, photo_file_id: str | None, prep_sec: int, answer_sec: int,
+                       meta: str | None = None) -> int:
     row = await _fetchone("SELECT COALESCE(MAX(position), 0) AS m FROM questions WHERE exam_id = ?", (exam_id,))
     return await _execute(
-        """INSERT INTO questions (exam_id, position, text, photo_file_id, prep_sec, answer_sec)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (exam_id, row["m"] + 1, text, photo_file_id, prep_sec, answer_sec),
+        """INSERT INTO questions (exam_id, position, text, photo_file_id, prep_sec, answer_sec, meta)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (exam_id, row["m"] + 1, text, photo_file_id, prep_sec, answer_sec, meta),
     )
 
 
@@ -265,10 +268,25 @@ async def delete_question(question_id: int):
     await _execute("DELETE FROM questions WHERE id = ?", (question_id,))
 
 
-async def set_writing_task(exam_id: int, text: str, photo_file_id: str | None = None):
-    """Writing mavzusida bitta topshiriq matni bo'ladi - eskisi almashtiriladi."""
-    await _execute("DELETE FROM questions WHERE exam_id = ?", (exam_id,))
-    await add_question(exam_id, text, photo_file_id, 0, 0)
+async def get_writing_task(exam_id: int):
+    """Writing mavzusining topshirig'i (bitta qator) yoki None."""
+    return await _fetchone("SELECT * FROM questions WHERE exam_id = ? ORDER BY position, id LIMIT 1", (exam_id,))
+
+
+async def save_writing_task(exam_id: int, text: str, meta: str | None):
+    """Writing mavzusida bitta topshiriq bo'ladi: bor bo'lsa - matni yangilanadi (rasm saqlanib qoladi)."""
+    row = await get_writing_task(exam_id)
+    if not row:
+        await add_question(exam_id, text, None, 0, 0, meta)
+        return
+    await _execute("UPDATE questions SET text = ?, meta = ? WHERE id = ?", (text, meta, row["id"]))
+    await _execute("DELETE FROM questions WHERE exam_id = ? AND id != ?", (exam_id, row["id"]))
+
+
+async def set_writing_photo(exam_id: int, photo_file_id: str | None):
+    if not await get_writing_task(exam_id):
+        await add_question(exam_id, "", None, 0, 0, "{}")
+    await _execute("UPDATE questions SET photo_file_id = ? WHERE exam_id = ?", (photo_file_id, exam_id))
 
 
 # ---------- Speaking urinishlari ----------
@@ -313,6 +331,17 @@ async def create_writing_submission(telegram_id: int, exam_id: int, text: str, w
     return await _execute(
         "INSERT INTO writing_submissions (telegram_id, exam_id, text, words) VALUES (?, ?, ?, ?)",
         (telegram_id, exam_id, text, words),
+    )
+
+
+async def find_recent_writing(telegram_id: int, exam_id: int, text: str, minutes: int = 30):
+    """Aynan shu matn yaqinda tekshirilganmi (qayta yuborilganda yangidan baholamaslik uchun)."""
+    return await _fetchone(
+        """SELECT * FROM writing_submissions
+           WHERE telegram_id = ? AND exam_id = ? AND text = ? AND status = 'done'
+             AND created_at >= datetime('now', ?)
+           ORDER BY id DESC LIMIT 1""",
+        (telegram_id, exam_id, text, f"-{int(minutes)} minutes"),
     )
 
 
@@ -605,7 +634,7 @@ async def duplicate_exam(exam_id: int) -> int | None:
         return None
     new_id = await create_exam(f"{exam['title']} (nusxa)"[:100], exam.get("kind") or "speaking", exam.get("part"))
     for q in await get_questions(exam_id):
-        await add_question(new_id, q["text"], q["photo_file_id"], q["prep_sec"], q["answer_sec"])
+        await add_question(new_id, q["text"], q["photo_file_id"], q["prep_sec"], q["answer_sec"], q.get("meta"))
     return new_id
 
 
