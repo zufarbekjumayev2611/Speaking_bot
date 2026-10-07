@@ -121,7 +121,8 @@ async def start_exam(request: web.Request):
     allowed, reason = await check_access(user["id"])
     if not allowed:
         return _error(403, reason)
-    attempt_id = await db.create_attempt(user["id"], exam_id)
+    # mini app qayta ochilsa (yoki «Qayta urinish») - yangi bo'sh urinish yaratilmaydi, oxirgisi davom etadi
+    attempt_id = await db.reusable_attempt(user["id"], exam_id) or await db.create_attempt(user["id"], exam_id)
     info = part_info("speaking", exam.get("part"))
     items, photo = [], None
     for q in questions:
@@ -179,7 +180,7 @@ async def upload_answer(request: web.Request):
             transcript = await stt.transcribe(audio, audio_field.content_type)
         except Exception:
             log.exception("Transkripsiya xatosi (attempt %s)", attempt_id)
-            return _error(503, "Ovozni matnga aylantirib bo'lmadi. Qayta yozib ko'ring.")
+            return _error(503, "Ovozni matnga aylantirish xizmati hozir band.")
 
     await db.save_answer(attempt_id, question_id, transcript, duration)
     return web.json_response({"ok": True, "heard": bool(transcript)})
@@ -209,6 +210,10 @@ async def finish_exam(request: web.Request):
         answers = await db.get_answers(attempt_id)
         if not answers:
             return _error(400, "Hech bir javob yozib olinmadi.")
+        if not any((a.get("transcript") or "").strip() for a in answers):
+            # ovoz umuman eshitilmadi (mikrofon o'chiq / noto'g'ri qurilma) - limit sarflanmaydi
+            return _error(400, "Ovozingiz eshitilmadi — mikrofon ishlamayotgan bo'lishi mumkin. Mikrofonni tekshirib, "
+                               "imtihonni qaytadan boshlang. Bu urinish limitga kirmadi.")
         # Imtihon davomida limit tugagan bo'lishi mumkin (masalan, bir vaqtda bir nechta imtihon ochilgan)
         allowed, reason = await acquire_check(user["id"])
         if not allowed:
@@ -247,10 +252,11 @@ async def finish_exam(request: web.Request):
 
 # ---------- Yazma (writing) - imtihon rejimi ----------
 
-async def _writing_exam(exam_id: int) -> tuple[dict | None, dict | None, dict]:
-    """(mavzu, topshiriq qatori, maydonlar) - mavzu ochiq va topshirig'i to'liq bo'lsagina."""
+async def _writing_exam(exam_id: int, resume: bool = False) -> tuple[dict | None, dict | None, dict]:
+    """(mavzu, topshiriq qatori, maydonlar) - mavzu ochiq va topshirig'i to'liq bo'lsagina.
+    resume=True: o'quvchi saqlangan qoralamasini davom ettiryapti - mavzu yopilgan bo'lsa ham ochiladi."""
     exam = await db.get_exam(exam_id)
-    if not exam or not exam["is_active"] or exam.get("kind") != "writing":
+    if not exam or (not exam["is_active"] and not resume) or exam.get("kind") != "writing":
         return None, None, {}
     row = await db.get_writing_task(exam_id)
     values = writing.task_values(exam.get("part"), row)
@@ -261,7 +267,7 @@ async def _writing_exam(exam_id: int) -> tuple[dict | None, dict | None, dict]:
 
 async def start_writing(request: web.Request):
     user = _user_or_401(request)
-    exam, row, values = await _writing_exam(int(request.match_info["exam_id"]))
+    exam, row, values = await _writing_exam(int(request.match_info["exam_id"]), request.query.get("resume") == "1")
     if not exam:
         return _error(404, "Bu mavzu hozir yopiq.")
     await db.save_user(user["id"], _full_name(user), user.get("username"))
@@ -308,6 +314,7 @@ async def submit_writing(request: web.Request):
     except writing.WritingDenied as denied:
         return _error(403, str(denied))
     except Exception as e:
+        log.exception("Yazma topshirish xatosi (exam %s, user %s)", exam_id, user["id"])
         if getattr(e, "status", None) == 429:
             return _error(503, "Hozir tekshirish navbati band. Matnlaringiz saqlangan — 1–2 daqiqadan keyin "
                                "«Qayta urinish»ni bosing.")

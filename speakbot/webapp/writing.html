@@ -227,6 +227,7 @@ let submitting = false;
 let warned5 = false;
 let saveTimer = null;
 let editorBound = false;  // matn maydoni hozir qaysidir bo'limga bog'langanmi
+let finished = false;     // ish topshirildi (yoki bekor bo'ldi) - qoralama endi saqlanmaydi
 
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
@@ -303,6 +304,7 @@ function loadDraft() {
   } catch { return null; }
 }
 function saveDraft() {
+  if (finished) return;  // topshirilgan ish qoralama sifatida qayta saqlanmasin
   try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ startedAt, texts, active })); } catch { /* xotira yopiq */ }
 }
 function clearDraft() {
@@ -316,7 +318,7 @@ async function load() {
   if (!examId) return fail("Mavzu tanlanmagan. Botga qaytib, mavzuni qayta tanlang.");
   show("loading");
   try {
-    exam = await api(`/api/wexam/${encodeURIComponent(examId)}`);
+    exam = await api(`/api/wexam/${encodeURIComponent(examId)}${loadDraft() ? "?resume=1" : ""}`);
   } catch (e) {
     return fail(e.message, e.status === 403 || e.status === 404 ? null : load);
   }
@@ -364,6 +366,7 @@ $("restartBtn").onclick = async () => {
 
 // ---------- 2. Imtihon ----------
 function begin() {
+  finished = false;
   texts = {};
   active = 0;
   startedAt = Date.now();
@@ -372,6 +375,7 @@ function begin() {
 }
 
 function resume(draft, noTimer) {
+  finished = false;
   texts = draft.texts || {};
   active = Math.min(Math.max(0, draft.active | 0), exam.components.length - 1);
   startedAt = draft.startedAt;
@@ -411,6 +415,7 @@ function tick() {
 async function timeUp() {
   saveDraft();
   if (!hasText(texts)) {
+    finished = true;
     clearDraft();
     tg?.disableClosingConfirmation?.();
     return fail("Vaqt tugadi. Hech narsa yozilmagani uchun ish topshirilmadi.");
@@ -473,7 +478,7 @@ $("editor").addEventListener("input", () => {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(saveDraft, 400);
 });
-document.addEventListener("visibilitychange", () => { if (exam && startedAt && !submitting) saveDraft(); });
+document.addEventListener("visibilitychange", () => { if (exam && startedAt && !submitting && !finished) saveDraft(); });
 
 // Turkcha (maxsus) harflar paneli: tugma bosilganda matn maydonidan fokus ketmaydi
 function buildChars() {
@@ -481,9 +486,12 @@ function buildChars() {
   $("chars").hidden = !chars.length;
   $("chars").innerHTML = chars.map((ch) => `<button type="button" data-ch="${esc(ch)}">${esc(ch)}</button>`).join("");
   $("chars").querySelectorAll("button").forEach((b) => {
-    const insert = (ev) => { ev.preventDefault(); insertText(b.dataset.ch); };
-    if (window.PointerEvent) b.addEventListener("pointerdown", insert);
-    else { b.addEventListener("touchstart", insert, { passive: false }); b.addEventListener("mousedown", insert); }
+    // bosilganda fokus matn maydonida qoladi (klaviatura yopilmaydi); harf faqat barmoq siljimasa qo'yiladi
+    let x = 0, y = 0, moved = false;
+    b.addEventListener("pointerdown", (ev) => { ev.preventDefault(); x = ev.clientX; y = ev.clientY; moved = false; });
+    b.addEventListener("pointermove", (ev) => { if (Math.abs(ev.clientX - x) + Math.abs(ev.clientY - y) > 10) moved = true; });
+    b.addEventListener("mousedown", (ev) => ev.preventDefault());
+    b.addEventListener("click", (ev) => { ev.preventDefault(); if (!moved) insertText(b.dataset.ch); moved = false; });
   });
 }
 
@@ -513,7 +521,7 @@ async function submit(auto) {
       return `${st === "ok" ? "✅" : "⚠️"} ${c.name}: ${n} so'z (talab: ${c.words})`;
     });
     const ok = await confirmDialog(`Ishni topshirasizmi? Keyin o'zgartirib bo'lmaydi.\n\n${lines.join("\n")}`);
-    if (!ok) return;
+    if (!ok || submitting) return;  // oyna ochiq turganda vaqt tugab, ish o'zi topshirilgan bo'lishi mumkin
   }
   submitting = true;
   clearInterval(timer);
@@ -530,6 +538,7 @@ async function submit(auto) {
       }),
     });
     submitting = false;
+    finished = true;
     clearDraft();
     tg?.disableClosingConfirmation?.();
     showResult(result);

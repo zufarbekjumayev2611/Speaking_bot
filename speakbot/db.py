@@ -415,6 +415,16 @@ async def create_attempt(telegram_id: int, exam_id: int) -> int:
     return await _execute("INSERT INTO attempts (telegram_id, exam_id) VALUES (?, ?)", (telegram_id, exam_id))
 
 
+async def reusable_attempt(telegram_id: int, exam_id: int, hours: int = 6) -> int | None:
+    """Shu o'quvchining shu imtihondagi yaqinda boshlangan, tugallanmagan urinishi (javoblari qayta yoziladi)."""
+    row = await _fetchone(
+        """SELECT id FROM attempts WHERE telegram_id = ? AND exam_id = ? AND status = 'in_progress'
+             AND created_at >= datetime('now', ?) ORDER BY id DESC LIMIT 1""",
+        (telegram_id, exam_id, f"-{int(hours)} hours"),
+    )
+    return row["id"] if row else None
+
+
 async def get_attempt(attempt_id: int):
     return await _fetchone("SELECT * FROM attempts WHERE id = ?", (attempt_id,))
 
@@ -448,6 +458,14 @@ async def finish_attempt(attempt_id: int, score: int, level: str, result: dict, 
 # ---------- Writing ishlari ----------
 
 async def create_writing_submission(telegram_id: int, exam_id: int, text: str, words: int) -> int:
+    # aynan shu ish oldin tekshirilmay qolgan bo'lsa (AI xatosi) - o'sha qator qayta ishlatiladi, nusxa ko'paymaydi
+    row = await _fetchone(
+        "SELECT id FROM writing_submissions WHERE telegram_id = ? AND exam_id = ? AND text = ? AND status = 'pending' "
+        "ORDER BY id DESC LIMIT 1",
+        (telegram_id, exam_id, text),
+    )
+    if row:
+        return row["id"]
     return await _execute(
         "INSERT INTO writing_submissions (telegram_id, exam_id, text, words) VALUES (?, ?, ?, ?)",
         (telegram_id, exam_id, text, words),

@@ -207,15 +207,29 @@ let exam = null;          // {attempt_id, title, questions}
 let stream = null;        // mikrofon oqimi (butun imtihon davomida bitta)
 let index = 0;
 let timer = null;
-const uploads = [];       // har savol yozuvining yuklanish jarayoni
+const answers = [];       // har savol: {qId, blob, duration, done, promise} - yuklanmasa qayta yuboriladi
 
 // ---------- Yordamchilar ----------
 async function api(path, options = {}) {
-  const res = await fetch(path, { ...options, headers: { ...(options.headers || {}), "X-Init-Data": initData } });
+  let res;
+  try {
+    res = await fetch(path, { ...options, headers: { ...(options.headers || {}), "X-Init-Data": initData } });
+  } catch {
+    const err = new Error("Server bilan aloqa uzildi. Internetni tekshiring.");
+    err.status = 0;
+    throw err;
+  }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "Server bilan aloqa uzildi. Internetni tekshiring.");
+  if (!res.ok) {
+    const err = new Error(data.error || "Server bilan aloqa uzildi. Internetni tekshiring.");
+    err.status = res.status;
+    throw err;
+  }
   return data;
 }
+
+// Qayta urinish faqat vaqtinchalik xatolarda ma'noli (tarmoq, server band); 400/401/403/404 - qayta urinish foydasiz
+const retryable = (e) => !e.status || e.status >= 500 || e.status === 409 || e.status === 429;
 
 function fail(message, retry) {
   $("errorText").textContent = message;
@@ -333,10 +347,11 @@ function debateTable(d) {
 async function load() {
   if (!initData) return fail("Bu sahifani bot ichidagi tugma orqali oching.");
   if (!examId) return fail("Imtihon tanlanmagan. Botga qaytib, imtihonni qayta tanlang.");
+  show("loading");
   try {
-    exam = await api(`/api/exam/${examId}`);
+    exam = await api(`/api/exam/${encodeURIComponent(examId)}`);
   } catch (e) {
-    return fail(e.message, load);
+    return fail(e.message, retryable(e) ? load : null);
   }
   $("examTitle").textContent = exam.title;
   if (exam.section_name) document.title = exam.section_name;
@@ -407,16 +422,25 @@ async function record(q) {
   await tink();             // signal yozuvga tushmasligi uchun yozuv signal tugagach boshlanadi
 
   const mime = pickMime();
-  const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+  let recorder;
+  try {
+    recorder = await startRecorder(mime);
+  } catch {
+    recordingFor = null;
+    return fail("Mikrofon ishlamay qoldi (qo'ng'iroq yoki boshqa ilova uni egallagan bo'lishi mumkin). "
+      + "«Qayta urinish»ni bosing — imtihon shu savoldan davom etadi.", () => reacquireMic().then(() => resumeFrom(q)));
+  }
   const chunks = [];
   recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
   recorder.onstop = () => {
     const blob = new Blob(chunks, { type: recorder.mimeType || mime || "audio/webm" });
     const duration = (Date.now() - startedAt) / 1000;
-    uploads.push(uploadWithRetry(q.id, blob, duration));
+    const a = { qId: q.id, blob, duration, done: false };
+    a.promise = uploadAnswer(a);
+    a.promise.catch(() => {});  // xato yakunlashda (finish) ko'rsatiladi va qayta yuboriladi
+    answers.push(a);
     next();
   };
-  recorder.start(1000);
   const startedAt = Date.now();
   haptic("success");
 
@@ -429,24 +453,59 @@ async function record(q) {
   countdown(q.answer_sec, (left) => setDial(left, q.answer_sec), stop);
 }
 
+// Mikrofon oqimi uzilgan bo'lsa (iOS'da qo'ng'iroq, Siri), uni qayta olib, yozuvni boshlaydi
+async function startRecorder(mime) {
+  const make = () => {
+    const r = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+    r.start(1000);
+    return r;
+  };
+  const live = stream && stream.getAudioTracks().some((t) => t.readyState === "live");
+  if (live) {
+    try { return make(); } catch { /* quyida qayta urinamiz */ }
+  }
+  stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+  return make();
+}
+
+async function reacquireMic() {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+  } catch {
+    fail("Mikrofonga ruxsat berilmadi. Telefon sozlamalarida Telegram'ga mikrofon ruxsatini yoqing va qayta oching.");
+    throw new Error("mic");
+  }
+}
+
+function resumeFrom(q) {
+  tg?.enableClosingConfirmation?.();
+  index = exam.questions.indexOf(q);
+  askQuestion();
+}
+
 function next() {
   index += 1;
   if (index < exam.questions.length) askQuestion(); else finish();
 }
 
 // ---------- 4. Yuklash (fonda, keyingi savol kutib turmaydi) ----------
-async function uploadWithRetry(questionId, blob, duration, attempts = 3) {
-  for (let i = 1; i <= attempts; i++) {
+const BACKOFF = [2000, 5000, 10000];   // internet uzilsa - kutib, qayta yuboriladi
+
+async function uploadAnswer(a) {
+  for (let i = 0; ; i++) {
     try {
       const form = new FormData();
       form.append("attempt_id", exam.attempt_id);
-      form.append("question_id", questionId);
-      form.append("audio", blob, "answer");
-      form.append("duration", duration.toFixed(1));
-      return await api("/api/answer", { method: "POST", body: form });
+      form.append("question_id", a.qId);
+      form.append("audio", a.blob, "answer");
+      form.append("duration", a.duration.toFixed(1));
+      const r = await api("/api/answer", { method: "POST", body: form });
+      a.done = true;
+      a.heard = r.heard;
+      return r;
     } catch (e) {
-      if (i === attempts) throw e;
-      await new Promise((r) => setTimeout(r, 1500 * i));
+      if (i >= BACKOFF.length || !retryable(e)) throw e;
+      await new Promise((r) => setTimeout(r, BACKOFF[i]));
     }
   }
 }
@@ -456,10 +515,20 @@ async function finish() {
   stream?.getTracks().forEach((t) => t.stop());
   show("loading");
   $("loadingText").textContent = "Javoblaringiz yuborilmoqda…";
-  const results = await Promise.allSettled(uploads);
+  // yuklanmay qolgan javoblar qayta yuboriladi (yozuvlar telefonda saqlangan)
+  for (const a of answers) {
+    if (!a.done && a.failed) {
+      a.promise = uploadAnswer(a);
+      a.promise.catch(() => {});
+    }
+  }
+  const results = await Promise.allSettled(answers.map((a) => a.promise));
+  results.forEach((r, i) => { answers[i].failed = r.status === "rejected"; });
   const failed = results.filter((r) => r.status === "rejected");
-  if (failed.length === results.length) {
-    return fail(failed[0].reason?.message || "Javoblar yuborilmadi.", finish);
+  if (failed.length) {
+    // hamma javob yetib bormaguncha baholanmaydi - aks holda ball noto'g'ri pasayadi
+    const why = failed[0].reason?.message || "Javoblar yuborilmadi.";
+    return fail(`${failed.length} ta javob yuborilmadi: ${why} Yozuvlaringiz saqlangan — «Qayta urinish»ni bosing.`, finish);
   }
   $("loadingText").textContent = "Sun'iy intellekt baholamoqda… (10–20 soniya)";
   try {
@@ -470,7 +539,7 @@ async function finish() {
     });
     showResult(result);
   } catch (e) {
-    fail(e.message, finish);
+    fail(e.message, retryable(e) ? finish : null);
   }
 }
 
