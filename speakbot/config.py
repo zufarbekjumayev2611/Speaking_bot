@@ -1,6 +1,7 @@
 """Barcha sozlamalar muhit o'zgaruvchilaridan (.env yoki Render -> Environment) olinadi.
 Maxfiy kalitlarni HECH QACHON kod ichiga yozmang - repo public."""
 import os
+import re
 
 
 def _required(name: str) -> str:
@@ -13,12 +14,17 @@ def _required(name: str) -> str:
 BOT_TOKEN = _required("BOT_TOKEN")
 GROQ_API_KEY = _required("GROQ_API_KEY")  # ovozni matnga aylantirish uchun doim kerak
 # Render o'zi RENDER_EXTERNAL_URL beradi (https://<nom>.onrender.com) - alohida yozish shart emas.
-WEBAPP_URL = (os.getenv("WEBAPP_URL", "").strip() or os.getenv("RENDER_EXTERNAL_URL", "").strip()).rstrip("/")
+# Render'da doim shu servisning O'Z manzili ishlatiladi: WEBAPP_URL eski servisga qarab qolsa, mini app
+# boshqa (eski) botga ulanar va keep-alive o'sha eski botni uyg'otib turardi - ikki bot bir vaqtda ishlardi.
+RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
+WEBAPP_URL_ENV = os.getenv("WEBAPP_URL", "").strip().rstrip("/")
+WEBAPP_URL = RENDER_URL or WEBAPP_URL_ENV
+WEBAPP_URL_IGNORED = bool(RENDER_URL and WEBAPP_URL_ENV and WEBAPP_URL_ENV != RENDER_URL)
 if not WEBAPP_URL:
     raise RuntimeError("WEBAPP_URL muhit o'zgaruvchisi topilmadi.")
 
-# Adminlar: vergul bilan ajratilgan Telegram ID'lar, masalan "111111111,222222222"
-ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").replace(" ", "").split(",") if x]
+# Adminlar: Telegram ID'lar, vergul / bo'sh joy / yangi qator bilan, masalan "111111111, 222222222"
+ADMIN_IDS = [int(x) for x in re.findall(r"-?\d+", os.getenv("ADMIN_IDS", ""))]
 
 # Imtihon tili: "tr" - turk tili (standart), "en" - ingliz tili
 EXAM_LANGUAGE = os.getenv("EXAM_LANGUAGE", "tr").strip().lower()
@@ -43,6 +49,20 @@ RATERS = max(1, min(3, int(os.getenv("RATERS", "1"))))
 STT_MODEL = os.getenv("STT_MODEL", "whisper-large-v3-turbo")
 
 DB_PATH = os.getenv("DB_PATH", "speakbot.db")
+# Turso (libSQL) - berilsa, ma'lumotlar lokal fayl o'rniga Turso bazasida saqlanadi.
+# Render'da qaysi nom bilan kiritilgan bo'lsa ham topiladi.
+def _first_env(*names: str) -> str:
+    for n in names:
+        v = os.getenv(n, "").strip()
+        if v:
+            return v
+    return ""
+
+
+TURSO_URL = _first_env("TURSO_DATABASE_URL", "TURSO_DB_URL", "TURSO_URL", "LIBSQL_URL", "DATABASE_URL")
+TURSO_TOKEN = _first_env("TURSO_AUTH_TOKEN", "TURSO_TOKEN", "TURSO_DB_TOKEN", "LIBSQL_AUTH_TOKEN", "DATABASE_TOKEN")
+if TURSO_URL and not TURSO_URL.startswith(("libsql://", "https://", "http://", "wss://", "ws://")):
+    TURSO_URL = ""  # masalan postgres:// - Turso emas
 PORT = int(os.getenv("PORT", "8080"))
 
 

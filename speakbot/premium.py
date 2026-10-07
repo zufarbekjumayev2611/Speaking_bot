@@ -10,7 +10,7 @@ import logging
 from datetime import datetime, timedelta
 
 from aiogram import BaseMiddleware, F, Router
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -140,22 +140,46 @@ async def premium_info(message: Message, state: FSMContext):
 # ADMIN yordamchilari
 # ======================================================================
 
-async def _resolve(message: Message) -> dict | None:
-    """Admin yuborgan ID yoki @username bo'yicha foydalanuvchini topadi; topilmasa - xabar beradi."""
+async def _not_admin(message: Message, state: FSMContext):
+    """Admin huquqi olib tashlangan odamning eski (admin) holati - tozalab, oddiy menyuni ko'rsatamiz."""
+    await state.clear()
+    from bot import main_keyboard  # aylana importdan qochish uchun shu yerda
+    await message.answer("Bo'limni tanlang 👇", reply_markup=main_keyboard(message.from_user.id))
+
+
+async def _resolve(message: Message, must_exist: bool = False) -> dict | None:
+    """Admin yuborgan ID, @username, t.me havola yoki ism bo'yicha foydalanuvchini topadi; topilmasa - xabar beradi.
+    Botda hali yo'q ID: must_exist=True bo'lsa rad etiladi, aks holda ogohlantirish bilan qabul qilinadi."""
     user = await db.find_user(message.text or "")
     if not user:
         await message.answer(
-            "Foydalanuvchi topilmadi. Telegram ID (raqam) yoki botdan foydalangan odamning @username'ini yuboring.\n"
+            "Foydalanuvchi topilmadi. Telegram ID (raqam), @username yoki botdagi ismini yuboring.\n"
             "Bekor qilish: /cancel"
+        )
+        return None
+    if not user.get("known"):
+        if must_exist:
+            await message.answer(
+                f"⚠️ <code>{user['telegram_id']}</code> ID bilan odam botda yo'q. U avval botga /start yuborsin, "
+                "keyin qayta urinib ko'ring. Bekor qilish: /cancel",
+                parse_mode="HTML",
+            )
+            return None
+        await message.answer(
+            f"⚠️ <code>{user['telegram_id']}</code> ID bilan odam botda hali yo'q (u /start bosmagan). "
+            "ID to'g'riligini tekshiring — davom etsangiz, u botga kirganda tarif ishlaydi.",
+            parse_mode="HTML",
         )
     return user
 
 
-async def _notify(bot, user_id: int, text: str):
+async def _notify(bot, user_id: int, text: str) -> bool:
     try:
         await bot.send_message(user_id, text, parse_mode="HTML")
+        return True
     except Exception:
         log.info("Foydalanuvchiga (%s) xabar yuborib bo'lmadi - u botni ishga tushirmagan bo'lishi mumkin", user_id)
+        return False
 
 
 def _guard(callback: CallbackQuery) -> bool:
@@ -225,14 +249,15 @@ async def _ask_plan(target: Message, state: FSMContext, user: dict):
         f"👤 {_who(user)}{now}\n\nQaysi tarif?\n"
         f"⭐ Standard — {plans.limit_text('standard')}\n💎 Pro — {plans.limit_text('pro')}",
         parse_mode="HTML",
-        reply_markup=_kb([[_btn("⭐ Standard", "pgp:standard"), _btn("💎 Pro", "pgp:pro")]]),
+        reply_markup=_kb([[_btn("⭐ Standard", f"pgp:{user['telegram_id']}:standard"),
+                           _btn("💎 Pro", f"pgp:{user['telegram_id']}:pro")]]),
     )
 
 
 @router.message(PremGrant.user)
 async def grant_user(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
-        return
+        return await _not_admin(message, state)
     user = await _resolve(message)
     if user:
         await _ask_plan(message, state, user)
@@ -245,19 +270,32 @@ async def user_grant(callback: CallbackQuery, state: FSMContext):
         return await callback.answer()
     user = await db.find_user(callback.data.split(":")[1])
     await callback.answer()
-    await _ask_plan(callback.message, state, user)
+    if user:
+        await _ask_plan(callback.message, state, user)
 
 
-@router.callback_query(PremGrant.plan, F.data.startswith("pgp:"))
+def _target_matches(data: dict, uid: str) -> bool:
+    """Tugma aynan hozir premium berilayotgan odamga tegishlimi (eski xabardagi tugma boshqa odamniki bo'lishi mumkin)."""
+    return uid.lstrip("-").isdigit() and data.get("target") == int(uid)
+
+
+@router.callback_query(StateFilter(PremGrant.plan, PremGrant.days), F.data.startswith("pgp:"))
 async def grant_plan(callback: CallbackQuery, state: FSMContext):
     if not _guard(callback):
         return await callback.answer()
-    plan = callback.data.split(":")[1]
-    if plan not in plans.PAID:
+    bits = callback.data.split(":")
+    if len(bits) != 3 or bits[2] not in plans.PAID:
         return await callback.answer()
+    if not _target_matches(await state.get_data(), bits[1]):
+        return await callback.answer("Bu tugma boshqa foydalanuvchi uchun edi. Eng oxirgi xabardagi tugmani bosing.", show_alert=True)
+    plan, uid = bits[2], bits[1]
     await state.update_data(plan=plan)
     await state.set_state(PremGrant.days)
-    kb = _kb([[_btn(f"{d} kun", f"pgd:{d}") for d in DURATIONS[:2]], [_btn(f"{d} kun", f"pgd:{d}") for d in DURATIONS[2:]]])
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    kb = _kb([[_btn(f"{d} kun", f"pgd:{uid}:{d}") for d in DURATIONS[:2]], [_btn(f"{d} kun", f"pgd:{uid}:{d}") for d in DURATIONS[2:]]])
     await callback.message.answer(
         f"{plans.name(plan)}. Necha kunlik beramiz? Tugmani bosing yoki kunlar sonini raqam bilan yozing.", reply_markup=kb
     )
@@ -278,14 +316,23 @@ async def _ask_note(target: Message, state: FSMContext, days: int):
 async def grant_days_button(callback: CallbackQuery, state: FSMContext):
     if not _guard(callback):
         return await callback.answer()
+    bits = callback.data.split(":")
+    if len(bits) != 3 or not bits[2].isdigit():
+        return await callback.answer()
+    if not _target_matches(await state.get_data(), bits[1]):
+        return await callback.answer("Bu tugma boshqa foydalanuvchi uchun edi. Eng oxirgi xabardagi tugmani bosing.", show_alert=True)
     await callback.answer()
-    await _ask_note(callback.message, state, int(callback.data.split(":")[1]))
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await _ask_note(callback.message, state, int(bits[2]))
 
 
 @router.message(PremGrant.days)
 async def grant_days_text(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
-        return
+        return await _not_admin(message, state)
     text = (message.text or "").strip()
     if not text.isdigit() or not 1 <= int(text) <= 3650:
         return await message.answer("Kunlar sonini 1 dan 3650 gacha raqam bilan yozing yoki tugmani bosing.")
@@ -295,22 +342,25 @@ async def grant_days_text(message: Message, state: FSMContext):
 @router.message(PremGrant.note)
 async def grant_note(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
-        return
+        return await _not_admin(message, state)
     note = (message.text or "").strip()
     if not note:
         return await message.answer("Izohni matn bilan yozing yoki «-» yuboring.")
     data = await state.get_data()
     await state.clear()
+    if not data.get("target") or not data.get("days"):
+        return await message.answer("Jarayon uzilib qolgan. «💎 Premium» bo'limidan qaytadan boshlang.")
     target, days, plan = data["target"], data["days"], data.get("plan", "pro")
     until = await db.grant_premium(target, days, "" if note == "-" else note[:200], message.from_user.id, plan)
-    await _notify(
+    delivered = await _notify(
         message.bot, target,
         f"{e(plans.name(plan))} <b>faollashtirildi!</b>\nTugash sanasi: <b>{_local(until)}</b>\n"
         f"Limit: {plans.limit_text(plan)} tekshiruv.\n\nOmad! 🎉",
     )
     text, kb = await _premium_view()
+    warn = "" if delivered else "\n⚠️ Foydalanuvchiga xabar yetkazilmadi (u botga /start bosmagan yoki botni to'xtatgan)."
     await message.answer(
-        f"✅ {data['label']} — {e(plans.name(plan))} <b>{_local(until)}</b> gacha ({days} kun qo'shildi).",
+        f"✅ {data['label']} — {e(plans.name(plan))} <b>{_local(until)}</b> gacha ({days} kun qo'shildi).{warn}",
         parse_mode="HTML",
     )
     await message.answer(text, parse_mode="HTML", reply_markup=kb)
@@ -338,19 +388,24 @@ async def _confirm_revoke(target: Message, user: dict, back: str):
     await target.answer(
         f"👤 {_who(user)}\n{e(plans.name(prem['plan']))}: {_local(prem['until'])} gacha.\n\nBekor qilamizmi?",
         parse_mode="HTML",
-        reply_markup=_kb([[_btn("✅ Ha, bekor qilish", f"prv:{user['telegram_id']}"), _btn("❌ Yo'q", back)]]),
+        reply_markup=_kb([[_btn("✅ Ha, bekor qilish", f"prv:{user['telegram_id']}:{_stamp(prem['until'])}"),
+                           _btn("❌ Yo'q", back)]]),
     )
 
 
 @router.message(PremRevoke.user)
 async def revoke_user(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
-        return
+        return await _not_admin(message, state)
     user = await _resolve(message)
     if not user:
         return
     await state.clear()
     await _confirm_revoke(message, user, "adm_prem")
+
+
+def _stamp(until: str) -> str:
+    return "".join(ch for ch in str(until) if ch.isdigit())
 
 
 @router.callback_query(F.data.startswith("usr_rv:"))
@@ -366,7 +421,13 @@ async def user_revoke_ask(callback: CallbackQuery):
 async def revoke_do(callback: CallbackQuery):
     if not _guard(callback):
         return await callback.answer()
-    await db.revoke_premium(int(callback.data.split(":")[1]), callback.from_user.id)
+    bits = callback.data.split(":")
+    uid = int(bits[1])
+    prem = await db.get_premium(uid)
+    if not prem or (len(bits) > 2 and bits[2] != _stamp(prem["until"])):
+        return await callback.answer("Obuna holati o'zgargan (yoki allaqachon bekor qilingan). Kartani qayta oching.",
+                                     show_alert=True)
+    await db.revoke_premium(uid, callback.from_user.id)
     text, kb = await _premium_view()
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
     await callback.answer("Premium bekor qilindi")
@@ -423,7 +484,7 @@ async def limit_edit(callback: CallbackQuery, state: FSMContext):
 @router.message(LimitEdit.value)
 async def limit_save(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
-        return
+        return await _not_admin(message, state)
     text = (message.text or "").strip().lower()
     if text in ("cheksiz", "unlimited", "-"):
         value = "unlimited"
@@ -459,7 +520,7 @@ async def info_edit(callback: CallbackQuery, state: FSMContext):
 @router.message(PremInfo.text)
 async def info_save(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
-        return
+        return await _not_admin(message, state)
     text = (message.text or "").strip()
     if not text:
         return await message.answer("Matn yuboring yoki «-» yozing.")
@@ -524,8 +585,8 @@ async def admin_add_start(callback: CallbackQuery, state: FSMContext):
 @router.message(AdminAdd.user)
 async def admin_add_save(message: Message, state: FSMContext):
     if not is_owner(message.from_user.id):
-        return
-    user = await _resolve(message)
+        return await _not_admin(message, state)
+    user = await _resolve(message, must_exist=True)
     if not user:
         return
     uid = user["telegram_id"]
@@ -640,7 +701,7 @@ async def _user_card(user: dict):
     rows = [[_btn("💎 Premium berish / uzaytirish", f"pgu:{uid}")]]
     if prem:
         rows.append([_btn("➖ Premiumni bekor qilish", f"usr_rv:{uid}")])
-    if not is_owner(uid):
+    if not is_admin(uid):
         rows.append([_btn("✅ Blokdan chiqarish" if uid in config.BLOCKED_IDS else "🚫 Bloklash", f"usr_bl:{uid}")])
     rows.append([_btn("⬅️ Ro'yxat", "adm_users:0")])
     return "\n".join(lines)[:4000], _kb(rows)
@@ -661,8 +722,8 @@ async def user_block_toggle(callback: CallbackQuery):
     if not _guard(callback):
         return await callback.answer()
     uid = int(callback.data.split(":")[1])
-    if is_owner(uid):
-        return await callback.answer("Asosiy adminni bloklab bo'lmaydi.", show_alert=True)
+    if is_admin(uid):
+        return await callback.answer("Adminni bloklab bo'lmaydi — avval adminlikdan oling.", show_alert=True)
     blocked = uid not in config.BLOCKED_IDS
     await db.set_blocked(uid, blocked)
     text, kb = await _user_card(await db.find_user(str(uid)))
@@ -676,14 +737,14 @@ async def user_search_start(callback: CallbackQuery, state: FSMContext):
         return await callback.answer()
     await state.clear()
     await state.set_state(UserSearch.query)
-    await callback.message.answer("🔎 Foydalanuvchining Telegram ID'si yoki @username'ini yuboring. Bekor qilish: /cancel")
+    await callback.message.answer("🔎 Foydalanuvchining Telegram ID'si, @username'i yoki ismini yuboring. Bekor qilish: /cancel")
     await callback.answer()
 
 
 @router.message(UserSearch.query)
 async def user_search(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
-        return
+        return await _not_admin(message, state)
     user = await _resolve(message)
     if not user:
         return

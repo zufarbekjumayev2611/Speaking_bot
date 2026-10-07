@@ -6,7 +6,8 @@ from datetime import datetime, timedelta, timezone
 import aiosqlite
 
 import config
-from config import DB_PATH
+from config import DB_PATH, TURSO_TOKEN, TURSO_URL
+from turso import TursoClient, TursoError
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS exams (
@@ -78,6 +79,12 @@ CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+CREATE TABLE IF NOT EXISTS fsm_state (
+    key TEXT PRIMARY KEY,
+    state TEXT,
+    data TEXT,
+    updated_at TEXT DEFAULT (datetime('now'))
+);
 CREATE TABLE IF NOT EXISTS writing_submissions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     telegram_id INTEGER NOT NULL,
@@ -105,6 +112,65 @@ _MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN blocked INTEGER DEFAULT 0",
     "ALTER TABLE questions ADD COLUMN meta TEXT",  # writing topshirig'ining maydonlari (JSON)
 ]
+
+
+# Odam o'qiy oladigan ko'rinishlar (VIEW): Turso panelida (yoki SQLite'da) shu nomlar bilan ochiladi -
+# ism, test nomi, ball va Toshkent vaqti bilan. Jadvallarning o'zi o'zgarmaydi; har ishga tushishda yangilanadi.
+VIEWS = {
+    "v_foydalanuvchilar": """
+SELECT u.telegram_id,
+       u.full_name AS ism,
+       CASE WHEN u.username IS NOT NULL AND u.username != '' THEN '@' || u.username END AS username,
+       datetime(u.joined_at, '+5 hours') AS qoshilgan_vaqt,
+       CASE WHEN p.until > datetime('now') THEN COALESCE(p.plan, 'pro') ELSE 'free' END AS tarif,
+       CASE WHEN p.until > datetime('now') THEN datetime(p.until, '+5 hours') END AS tarif_tugashi,
+       CASE WHEN COALESCE(u.blocked, 0) = 1 THEN 'ha' ELSE 'yoq' END AS bloklangan,
+       (SELECT COUNT(*) FROM attempts a WHERE a.telegram_id = u.telegram_id AND a.status = 'done') AS konusma_tekshiruvlari,
+       (SELECT COUNT(*) FROM writing_submissions w WHERE w.telegram_id = u.telegram_id AND w.status = 'done') AS yazma_tekshiruvlari
+FROM users u LEFT JOIN premium p ON p.telegram_id = u.telegram_id
+ORDER BY u.joined_at DESC""",
+    "v_natijalar": """
+SELECT * FROM (
+    SELECT 'Konuşma' AS bolim, datetime(a.created_at, '+5 hours') AS vaqt, u.full_name AS oquvchi,
+           a.telegram_id, e.title AS test, e.part AS qism, a.raw_score AS ekspert_bahosi,
+           json_extract(a.result_json, '$.max_raw') AS maksimal_ball, a.score AS standart_ball_75, a.level AS daraja,
+           a.id AS urinish_id
+    FROM attempts a LEFT JOIN users u ON u.telegram_id = a.telegram_id LEFT JOIN exams e ON e.id = a.exam_id
+    WHERE a.status = 'done'
+    UNION ALL
+    SELECT 'Yazma', datetime(w.created_at, '+5 hours'), u.full_name, w.telegram_id, e.title, e.part, w.raw_score,
+           json_extract(w.result_json, '$.max_raw'), w.score, w.level, w.id
+    FROM writing_submissions w LEFT JOIN users u ON u.telegram_id = w.telegram_id LEFT JOIN exams e ON e.id = w.exam_id
+    WHERE w.status = 'done'
+) ORDER BY vaqt DESC""",
+    "v_yazma_ishlari": """
+SELECT datetime(w.created_at, '+5 hours') AS vaqt, u.full_name AS oquvchi, w.telegram_id, e.title AS mavzu,
+       e.part AS qism, w.words AS sozlar_soni, w.raw_score AS ekspert_bahosi, w.score AS standart_ball_75,
+       w.level AS daraja, CASE w.status WHEN 'done' THEN 'tekshirildi' ELSE 'tekshirilmadi' END AS holat,
+       w.text AS matn
+FROM writing_submissions w LEFT JOIN users u ON u.telegram_id = w.telegram_id LEFT JOIN exams e ON e.id = w.exam_id
+ORDER BY w.id DESC""",
+    "v_testlar": """
+SELECT e.id, e.title AS nomi,
+       CASE COALESCE(e.kind, 'speaking') WHEN 'writing' THEN 'Yazma' ELSE 'Konuşma' END AS bolim,
+       e.part AS qism, CASE WHEN e.is_active = 1 THEN 'ochiq' ELSE 'yopiq' END AS holat,
+       (SELECT COUNT(*) FROM questions q WHERE q.exam_id = e.id) AS savollar_soni,
+       datetime(e.created_at, '+5 hours') AS yaratilgan
+FROM exams e ORDER BY e.id DESC""",
+    "v_savollar": """
+SELECT e.title AS test, CASE COALESCE(e.kind, 'speaking') WHEN 'writing' THEN 'Yazma' ELSE 'Konuşma' END AS bolim,
+       e.part AS qism, q.position AS tartib, q.text AS matn,
+       CASE WHEN q.photo_file_id IS NOT NULL THEN 'bor' ELSE 'yoq' END AS rasm,
+       q.prep_sec AS tayyorlanish_s, q.answer_sec AS javob_s, q.id AS savol_id
+FROM questions q LEFT JOIN exams e ON e.id = q.exam_id
+ORDER BY q.exam_id, q.position""",
+    "v_premium_tarixi": """
+SELECT datetime(l.created_at, '+5 hours') AS vaqt, u.full_name AS foydalanuvchi, l.telegram_id,
+       CASE l.action WHEN 'grant' THEN 'berildi' WHEN 'revoke' THEN 'bekor qilindi' ELSE l.action END AS amal,
+       l.plan AS tarif, l.days AS kun, l.amount AS tolov_izohi, a.full_name AS admin
+FROM premium_log l LEFT JOIN users u ON u.telegram_id = l.telegram_id LEFT JOIN users a ON a.telegram_id = l.granted_by
+ORDER BY l.id DESC""",
+}
 
 
 _db: aiosqlite.Connection | None = None
@@ -139,6 +205,15 @@ async def _get() -> aiosqlite.Connection:
     return _db
 
 
+# Turso sozlangan bo'lsa - ma'lumotlar Turso'da (Render qayta ishga tushganda ham saqlanadi),
+# aks holda lokal SQLite fayl.
+_turso: TursoClient | None = TursoClient(TURSO_URL, TURSO_TOKEN) if TURSO_URL else None
+
+
+def backend_name() -> str:
+    return "Turso" if _turso else f"SQLite ({DB_PATH})"
+
+
 async def close_db():
     global _db
     if _db is not None:
@@ -147,6 +222,21 @@ async def close_db():
 
 
 async def init_db():
+    if _turso:
+        statements = [s.strip() for s in SCHEMA.split(";") if s.strip()]
+        await _turso.batch([(sql, ()) for sql in statements])
+        for sql in _MIGRATIONS:
+            try:
+                await _turso.execute(sql)
+            except TursoError:
+                pass  # ustun allaqachon bor
+        await _turso.batch(
+            [("UPDATE exams SET part = '1' WHERE kind = 'writing' AND part IN ('1.1', '1.2')", ())]
+            + [(sql, ()) for sql in _INDEXES]
+            + [(sql, ()) for sql in _view_statements()]
+        )
+        await load_settings()
+        return
     db = await _get()
     await db.executescript(SCHEMA)
     for sql in _MIGRATIONS:
@@ -158,11 +248,22 @@ async def init_db():
     await db.execute("UPDATE exams SET part = '1' WHERE kind = 'writing' AND part IN ('1.1', '1.2')")
     for sql in _INDEXES:
         await db.execute(sql)
+    for sql in _view_statements():
+        await db.execute(sql)
     await db.commit()
     await load_settings()
 
 
+def _view_statements() -> list[str]:
+    out = []
+    for name, body in VIEWS.items():
+        out += [f"DROP VIEW IF EXISTS {name}", f"CREATE VIEW {name} AS {body.strip()}"]
+    return out
+
+
 async def _fetchall(sql, params=()):
+    if _turso:
+        return (await _turso.execute(sql, params)).rows
     db = await _get()
     async with db.execute(sql, params) as cur:
         return [dict(r) for r in await cur.fetchall()]
@@ -174,6 +275,8 @@ async def _fetchone(sql, params=()):
 
 
 async def _execute(sql, params=()) -> int:
+    if _turso:
+        return (await _turso.execute(sql, params)).lastrowid
     db = await _get()
     cur = await db.execute(sql, params)
     await db.commit()
@@ -183,6 +286,9 @@ async def _execute(sql, params=()) -> int:
 # ---------- Foydalanuvchilar ----------
 
 async def save_user(telegram_id: int, full_name: str, username: str | None):
+    if username:  # Telegram'da username boshqa odamga o'tgan bo'lishi mumkin - qidiruv adashmasin
+        await _execute("UPDATE users SET username = NULL WHERE LOWER(username) = LOWER(?) AND telegram_id != ?",
+                       (username, telegram_id))
     await _execute(
         """INSERT INTO users (telegram_id, full_name, username) VALUES (?, ?, ?)
            ON CONFLICT(telegram_id) DO UPDATE SET full_name = excluded.full_name, username = excluded.username""",
@@ -232,6 +338,20 @@ async def list_active_exams(kind: str, part: str | None):
               AND EXISTS (SELECT 1 FROM questions q WHERE q.exam_id = e.id)
             ORDER BY e.id""",
         params,
+    )
+
+
+async def active_exams_with_task(kind: str):
+    """Barcha ochiq (savoli bor) testlar va ularning birinchi savoli / topshirig'i - bitta so'rovda
+    (Turso'da har bir so'rov alohida tarmoq murojaati - menyular tez ochilishi uchun)."""
+    return await _fetchall(
+        """SELECT e.*, q.text AS task_text, q.meta AS task_meta
+           FROM exams e
+           JOIN questions q ON q.id = (SELECT q2.id FROM questions q2 WHERE q2.exam_id = e.id
+                                       ORDER BY q2.position, q2.id LIMIT 1)
+           WHERE e.is_active = 1 AND COALESCE(e.kind, 'speaking') = ?
+           ORDER BY e.id""",
+        (kind,),
     )
 
 
@@ -295,6 +415,16 @@ async def create_attempt(telegram_id: int, exam_id: int) -> int:
     return await _execute("INSERT INTO attempts (telegram_id, exam_id) VALUES (?, ?)", (telegram_id, exam_id))
 
 
+async def reusable_attempt(telegram_id: int, exam_id: int, hours: int = 6) -> int | None:
+    """Shu o'quvchining shu imtihondagi yaqinda boshlangan, tugallanmagan urinishi (javoblari qayta yoziladi)."""
+    row = await _fetchone(
+        """SELECT id FROM attempts WHERE telegram_id = ? AND exam_id = ? AND status = 'in_progress'
+             AND created_at >= datetime('now', ?) ORDER BY id DESC LIMIT 1""",
+        (telegram_id, exam_id, f"-{int(hours)} hours"),
+    )
+    return row["id"] if row else None
+
+
 async def get_attempt(attempt_id: int):
     return await _fetchone("SELECT * FROM attempts WHERE id = ?", (attempt_id,))
 
@@ -328,6 +458,14 @@ async def finish_attempt(attempt_id: int, score: int, level: str, result: dict, 
 # ---------- Writing ishlari ----------
 
 async def create_writing_submission(telegram_id: int, exam_id: int, text: str, words: int) -> int:
+    # aynan shu ish oldin tekshirilmay qolgan bo'lsa (AI xatosi) - o'sha qator qayta ishlatiladi, nusxa ko'paymaydi
+    row = await _fetchone(
+        "SELECT id FROM writing_submissions WHERE telegram_id = ? AND exam_id = ? AND text = ? AND status = 'pending' "
+        "ORDER BY id DESC LIMIT 1",
+        (telegram_id, exam_id, text),
+    )
+    if row:
+        return row["id"]
     return await _execute(
         "INSERT INTO writing_submissions (telegram_id, exam_id, text, words) VALUES (?, ?, ?, ?)",
         (telegram_id, exam_id, text, words),
@@ -400,14 +538,25 @@ async def remove_admin(telegram_id: int):
 
 
 async def find_user(query: str):
-    """Telegram ID (raqam) yoki @username bo'yicha foydalanuvchini topadi."""
+    """Telegram ID (raqam), @username, t.me havola yoki ism bo'yicha foydalanuvchini topadi.
+    "known" - odam botda bormi (ID bo'yicha topilmasa ham ID'ning o'zi qaytariladi, known=False)."""
     q = (query or "").strip()
     if q.lstrip("-").isdigit():
-        return await get_user(int(q)) or {"telegram_id": int(q), "full_name": None, "username": None}
-    q = q.lstrip("@")
+        user = await get_user(int(q))
+        return {**user, "known": True} if user else {"telegram_id": int(q), "full_name": None, "username": None, "known": False}
+    for prefix in ("https://t.me/", "http://t.me/", "t.me/"):
+        if q.lower().startswith(prefix):
+            q = q[len(prefix):]
+    q = q.strip().lstrip("@").strip("/")
     if not q:
         return None
-    return await _fetchone("SELECT * FROM users WHERE LOWER(username) = LOWER(?)", (q,))
+    user = await _fetchone("SELECT * FROM users WHERE LOWER(username) = LOWER(?)", (q,))
+    if not user:  # ism bo'yicha (kirill, turkcha harflar ham) - faqat bitta odam mos kelsa
+        needle = q.casefold()
+        same = [u for u in await _fetchall("SELECT * FROM users WHERE full_name IS NOT NULL")
+                if needle in u["full_name"].casefold()]
+        user = same[0] if len(same) == 1 else None
+    return {**user, "known": True} if user else None
 
 
 # ---------- Premium ----------
@@ -527,9 +676,10 @@ async def count_checks_month(telegram_id: int) -> int:
 async def get_stats() -> dict:
     row = await _fetchone(
         """SELECT
-             (SELECT COUNT(*) FROM users) AS users,
-             (SELECT COUNT(*) FROM users WHERE date(joined_at, '+5 hours') = date('now', '+5 hours')) AS new_today,
-             (SELECT COUNT(*) FROM users WHERE joined_at >= datetime('now', '-7 days')) AS new_week,
+             (SELECT COUNT(*) FROM users WHERE full_name IS NOT NULL) AS users,
+             (SELECT COUNT(*) FROM users WHERE full_name IS NOT NULL
+                AND date(joined_at, '+5 hours') = date('now', '+5 hours')) AS new_today,
+             (SELECT COUNT(*) FROM users WHERE full_name IS NOT NULL AND joined_at >= datetime('now', '-7 days')) AS new_week,
              (SELECT COUNT(*) FROM users WHERE COALESCE(blocked, 0) = 1) AS blocked,
              (SELECT COUNT(*) FROM attempts WHERE status = 'done') AS speaking,
              (SELECT COUNT(*) FROM writing_submissions WHERE status = 'done') AS writing,
@@ -585,7 +735,12 @@ async def load_blocked():
 
 
 async def set_blocked(telegram_id: int, blocked: bool):
-    await _execute("UPDATE users SET blocked = ? WHERE telegram_id = ?", (int(blocked), telegram_id))
+    # botga hali yozmagan odam ham bloklanishi mumkin - qator bo'lmasa yaratiladi
+    await _execute(
+        """INSERT INTO users (telegram_id, blocked) VALUES (?, ?)
+           ON CONFLICT(telegram_id) DO UPDATE SET blocked = excluded.blocked""",
+        (telegram_id, int(blocked)),
+    )
     await load_blocked()
 
 
@@ -594,7 +749,8 @@ async def set_blocked(telegram_id: int, blocked: bool):
 async def broadcast_ids(audience: str) -> list[int]:
     """audience: all | free | standard | pro | premium"""
     now = _now().strftime(_FMT)
-    base = "SELECT u.telegram_id FROM users u LEFT JOIN premium p ON p.telegram_id = u.telegram_id AND p.until > ? WHERE COALESCE(u.blocked, 0) = 0"
+    base = ("SELECT u.telegram_id FROM users u LEFT JOIN premium p ON p.telegram_id = u.telegram_id AND p.until > ? "
+            "WHERE COALESCE(u.blocked, 0) = 0 AND u.full_name IS NOT NULL")  # botga yozmagan (faqat bloklangan) - yo'q
     cond = {
         "all": "",
         "free": " AND p.telegram_id IS NULL",
@@ -641,7 +797,7 @@ async def duplicate_exam(exam_id: int) -> int | None:
 # ---------- Foydalanuvchilar ro'yxati (admin uchun) ----------
 
 async def count_users() -> int:
-    return (await _fetchone("SELECT COUNT(*) AS c FROM users"))["c"]
+    return (await _fetchone("SELECT COUNT(*) AS c FROM users WHERE full_name IS NOT NULL"))["c"]
 
 
 async def list_users(offset: int = 0, limit: int = 8):
@@ -650,6 +806,7 @@ async def list_users(offset: int = 0, limit: int = 8):
         """SELECT u.telegram_id, u.full_name, u.username, u.joined_at,
                   (p.until IS NOT NULL AND p.until > ?) AS is_premium, p.plan AS plan, COALESCE(u.blocked, 0) AS blocked
            FROM users u LEFT JOIN premium p ON p.telegram_id = u.telegram_id
+           WHERE u.full_name IS NOT NULL OR COALESCE(u.blocked, 0) = 1
            ORDER BY u.joined_at DESC, u.telegram_id DESC LIMIT ? OFFSET ?""",
         (_now().strftime(_FMT), limit, offset),
     )
@@ -663,3 +820,20 @@ async def delete_all_exams() -> int:
     await _execute("DELETE FROM questions")
     await _execute("DELETE FROM exams")
     return n
+
+
+# ---------- Bot holati (FSM): ko'p bosqichli amallar qayta ishga tushganda ham davom etadi ----------
+
+async def fsm_get(key: str):
+    return await _fetchone("SELECT state, data, updated_at FROM fsm_state WHERE key = ?", (key,))
+
+
+async def fsm_set(key: str, state: str | None, data: str):
+    if state is None and not data:
+        await _execute("DELETE FROM fsm_state WHERE key = ?", (key,))
+        return
+    await _execute(
+        """INSERT INTO fsm_state (key, state, data, updated_at) VALUES (?, ?, ?, datetime('now'))
+           ON CONFLICT(key) DO UPDATE SET state = excluded.state, data = excluded.data, updated_at = excluded.updated_at""",
+        (key, state, data),
+    )
