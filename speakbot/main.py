@@ -4,6 +4,7 @@ MUHIM: shu botni faqat BITTA joyda ishga tushiring - aks holda TelegramConflictE
 Ikkinchi nusxa paydo bo'lsa, bot adminlarga o'zi xabar beradi (ops.py)."""
 import asyncio
 import logging
+import signal
 
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import SimpleEventIsolation
@@ -46,6 +47,13 @@ async def keep_alive():
             logging.warning("Keep-alive muvaffaqiyatsiz")
 
 
+async def _stop(dp: Dispatcher):
+    try:
+        await dp.stop_polling()
+    except RuntimeError:
+        pass  # polling ishlamayapti (kutish rejimi)
+
+
 async def main():
     await db.init_db()
     logging.info("Ma'lumotlar bazasi: %s", db.backend_name())
@@ -62,12 +70,35 @@ async def main():
     asyncio.create_task(keep_alive())
     asyncio.create_task(reminder_loop(bot))
     await bot.delete_webhook(drop_pending_updates=False)
+    await ops.take_leadership()   # yangi nusxa boshqaruvni oladi; eski nusxa 15 soniyada o'zi to'xtaydi
     await ops.startup(bot)
     asyncio.create_task(ops.refresh_loop())
+    asyncio.create_task(ops.leader_loop(bot, dp))
+    shutdown = asyncio.Event()
+
+    def on_signal():  # Render to'xtatganda (deploy / restart) - faol bo'lsa ham, kutishda bo'lsa ham chiqamiz
+        shutdown.set()
+        asyncio.ensure_future(_stop(dp))
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            asyncio.get_running_loop().add_signal_handler(sig, on_signal)
+        except (NotImplementedError, RuntimeError):
+            pass
     try:
-        await dp.start_polling(bot)
+        while not shutdown.is_set():
+            await dp.start_polling(bot, handle_signals=False)
+            if shutdown.is_set() or not ops.leader.stepped_down:
+                break
+            # boshqa nusxa faol - u to'xtaguncha kutamiz (mini app serveri ishlashda davom etadi)
+            waiters = [asyncio.ensure_future(ops.leader.regained.wait()), asyncio.ensure_future(shutdown.wait())]
+            await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+            for w in waiters:
+                w.cancel()
+            ops.leader.stepped_down = False
     finally:
         await ops.drain_background()  # deploy paytida boshlangan yazma tekshiruvlari tugasin
+        await ops.release_leadership()
         await close_session()
         await db.close_db()
 

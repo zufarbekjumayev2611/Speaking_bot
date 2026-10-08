@@ -79,6 +79,12 @@ CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+CREATE TABLE IF NOT EXISTS bot_lock (
+    id INTEGER PRIMARY KEY,
+    instance TEXT,
+    service TEXT,
+    heartbeat TEXT
+);
 CREATE TABLE IF NOT EXISTS fsm_state (
     key TEXT PRIMARY KEY,
     state TEXT,
@@ -837,3 +843,28 @@ async def fsm_set(key: str, state: str | None, data: str):
            ON CONFLICT(key) DO UPDATE SET state = excluded.state, data = excluded.data, updated_at = excluded.updated_at""",
         (key, state, data),
     )
+
+
+# ---------- Yagona faol nusxa: Telegram'dan xabarlarni faqat bitta bot nusxasi oladi ----------
+
+async def lock_take(instance: str, service: str):
+    await _execute(
+        """INSERT INTO bot_lock (id, instance, service, heartbeat) VALUES (1, ?, ?, datetime('now'))
+           ON CONFLICT(id) DO UPDATE SET instance = excluded.instance, service = excluded.service,
+                                         heartbeat = excluded.heartbeat""",
+        (instance, service),
+    )
+
+
+async def lock_get():
+    return await _fetchone(
+        "SELECT instance, service, heartbeat, (julianday('now') - julianday(heartbeat)) * 86400 AS age FROM bot_lock WHERE id = 1"
+    )
+
+
+async def lock_beat(instance: str):
+    await _execute("UPDATE bot_lock SET heartbeat = datetime('now') WHERE id = 1 AND instance = ?", (instance,))
+
+
+async def lock_release(instance: str):
+    await _execute("UPDATE bot_lock SET heartbeat = '2000-01-01 00:00:00' WHERE id = 1 AND instance = ?", (instance,))
