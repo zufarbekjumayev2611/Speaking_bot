@@ -23,6 +23,15 @@ WEBAPP_URL_IGNORED = bool(RENDER_URL and WEBAPP_URL_ENV and WEBAPP_URL_ENV != RE
 if not WEBAPP_URL:
     raise RuntimeError("WEBAPP_URL muhit o'zgaruvchisi topilmadi.")
 
+# Telegram'dan xabar olish usuli:
+#   webhook - Telegram xabarni serverga o'zi yuboradi (Render Web Service'da standart: tez, ikki nusxa urishmaydi);
+#   polling - bot o'zi so'rab oladi (kompyuterda ishga tushirish uchun);
+#   off     - bu servis botni umuman yurgizmaydi (Render Background Worker'da standart - bot Web Service'da ishlaydi).
+_default_mode = "webhook" if RENDER_URL else ("off" if os.getenv("RENDER") else "polling")
+BOT_MODE = os.getenv("BOT_MODE", "").strip().lower() or _default_mode
+if BOT_MODE not in ("webhook", "polling", "off"):
+    raise RuntimeError("BOT_MODE faqat 'webhook', 'polling' yoki 'off' bo'lishi mumkin.")
+
 # Adminlar: Telegram ID'lar, vergul / bo'sh joy / yangi qator bilan, masalan "111111111, 222222222"
 ADMIN_IDS = [int(x) for x in re.findall(r"-?\d+", os.getenv("ADMIN_IDS", ""))]
 

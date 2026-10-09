@@ -9,6 +9,8 @@
 - /status (admin) - server, baza va asosiy sonlar.
 """
 import asyncio
+import hashlib
+import html
 import logging
 import os
 import re
@@ -34,6 +36,13 @@ SERVICE_TYPE = os.getenv("RENDER_SERVICE_TYPE", "")
 VERSION = (os.getenv("RENDER_GIT_COMMIT") or "")[:7] or "lokal"
 TOUCH_EVERY = 1800  # foydalanuvchi ma'lumotini bazada yangilash oralig'i (s)
 
+# Webhook manzili tokendan hosil qilinadi (tashqaridan topib bo'lmaydi); Telegram har so'rovda maxfiy kalitni yuboradi.
+_H = hashlib.sha256(("speakbot-webhook:" + config.BOT_TOKEN).encode()).hexdigest()
+WEBHOOK_PATH = f"/tg/{_H[:24]}"
+WEBHOOK_SECRET = _H[24:64]
+WEBHOOK_URL = WEBAPP_URL + WEBHOOK_PATH
+WEBHOOK_CHECK = 60  # webhook joyidami - shuncha soniyada bir tekshiriladi
+
 
 def warnings() -> list[str]:
     """Render sozlamalaridagi xavfli holatlar (ikki bot, ma'lumot o'chishi)."""
@@ -58,10 +67,18 @@ def _db_line() -> str:
     return db.backend_name()
 
 
+def _mode_text() -> str:
+    if config.BOT_MODE == "webhook":
+        return "webhook"
+    if config.BOT_MODE == "off":
+        return "bot o'chirilgan (BOT_MODE=off)"
+    return "polling, faol" if leader.active else "polling, kutish rejimida"
+
+
 def instance_line() -> str:
     kind = f" ({SERVICE_TYPE})" if SERVICE_TYPE else ""
     lines = [f"Servis: <b>{SERVICE}</b>{kind} • versiya: <code>{VERSION}</code>",
-             f"Nusxa: <code>{INSTANCE}</code>{' • faol' if leader.active else ' • kutish rejimida'}",
+             f"Nusxa: <code>{INSTANCE}</code> • {_mode_text()}",
              f"Baza: <b>{_db_line()}</b>",
              f"Mini app: <code>{WEBAPP_URL}</code> • adminlar: <code>{', '.join(map(str, config.ADMIN_IDS)) or '-'}</code>"]
     return "\n".join(lines + warnings())
@@ -139,9 +156,21 @@ async def status(message: Message):
     by_kind = {r["kind"]: r for r in exams}
     sp, wr = by_kind.get("speaking", {}), by_kind.get("writing", {})
     up = int(time.time() - STARTED)
+    speed = f"Baza javobi: <b>{await db.ping() * 1000:.0f} ms</b>"
+    if config.BOT_MODE == "webhook":
+        try:
+            info = await message.bot.get_webhook_info()
+            speed += f" • navbatda: {info.pending_update_count} xabar"
+            if info.url != WEBHOOK_URL:
+                speed += "\n⚠️ Webhook boshqa manzilga o'rnatilgan — boshqa joyda eski bot ishlayapti"
+            elif info.last_error_message and info.last_error_date and time.time() - info.last_error_date.timestamp() < 600:
+                speed += f"\n⚠️ Oxirgi xato: {html.escape(info.last_error_message)}"
+        except Exception:
+            pass
     await message.answer(
         "🩺 <b>Holat</b>\n"
         f"{instance_line()}\n"
+        f"{speed}\n"
         f"Ishlayapti: {up // 3600} soat {up % 3600 // 60} daqiqa\n\n"
         f"👥 Foydalanuvchilar: <b>{users}</b>\n"
         f"🎙 Konuşma testlari: <b>{sp.get('open') or 0}</b> ochiq / {sp.get('total') or 0}\n"
@@ -267,6 +296,35 @@ async def leader_loop(bot, dp):
                 log.info("Faol nusxa javob bermadi - bu nusxa boshqaruvni oldi")
         except Exception:
             log.warning("Yetakchilikni tekshirib bo'lmadi", exc_info=True)
+
+
+async def set_webhook(bot, dp):
+    await bot.set_webhook(WEBHOOK_URL, secret_token=WEBHOOK_SECRET, allowed_updates=dp.resolve_used_update_types(),
+                          drop_pending_updates=False, max_connections=40)
+    log.info("Webhook o'rnatildi: %s/tg/…", WEBAPP_URL)
+
+
+async def webhook_watch(bot, dp):
+    """Har daqiqada: webhook bizning manzilda turibdimi. Boshqa joyda eski (polling) bot ishga tushib
+    webhookni o'chirib qo'ysa - qayta o'rnatamiz va adminlarga bir marta aytamiz."""
+    warned = False
+    while True:
+        await asyncio.sleep(WEBHOOK_CHECK)
+        try:
+            info = await bot.get_webhook_info()
+            if info.url == WEBHOOK_URL:
+                continue
+            log.warning("Webhook o'zgartirilgan (%r) - qayta o'rnatilmoqda", info.url)
+            await set_webhook(bot, dp)
+            if not warned:
+                warned = True
+                await _notify_admins(bot, (
+                    "⚠️ <b>Shu token bilan boshqa joyda ham bot ishlayapti</b> (eski servis, Background Worker yoki "
+                    "kompyuterdagi nusxa) va u botni o'ziga tortib oldi. Bot qayta tiklandi, lekin o'sha nusxani "
+                    f"o'chiring.\nBu nusxa — {instance_line()}"
+                ))
+        except Exception:
+            log.warning("Webhookni tekshirib bo'lmadi", exc_info=True)
 
 
 async def release_leadership():

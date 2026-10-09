@@ -15,7 +15,7 @@ import db
 
 
 TTL = 12 * 3600  # 12 soatdan beri tegilmagan yarim qolgan amal unutiladi (keyingi xabar eski amalga ketmasin)
-FRESH = 10       # xotiradagi nusxa necha soniya ishlatiladi (deploy paytida ikki nusxa bo'lsa ham chalkashmasin)
+FRESH = 30       # xotiradagi nusxa necha soniya ishlatiladi (deploy paytida ikki nusxa bo'lsa ham chalkashmasin)
 
 
 def _age(updated_at: str | None) -> float:

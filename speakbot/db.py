@@ -1,6 +1,7 @@
 """SQLite baza: imtihonlar (speaking/writing), savollar, urinishlar, javoblar, writing ishlari."""
 import json
 import os
+import time
 from datetime import datetime, timedelta, timezone
 
 import aiosqlite
@@ -291,15 +292,43 @@ async def _execute(sql, params=()) -> int:
 
 # ---------- Foydalanuvchilar ----------
 
+_saved_users: dict[int, tuple] = {}  # oxirgi yozilgan ism/username - o'zgarmagan bo'lsa bazaga qayta borilmaydi
+
+
+async def _execute_many(statements: list[tuple[str, tuple]]):
+    """Bir nechta yozuv - Turso'ga BITTA so'rovda (har so'rov ~0.1-0.3 s)."""
+    if _turso:
+        await _turso.batch(statements)
+        return
+    db = await _get()
+    for sql, params in statements:
+        await db.execute(sql, params)
+    await db.commit()
+
+
 async def save_user(telegram_id: int, full_name: str, username: str | None):
+    now = time.time()
+    last = _saved_users.get(telegram_id)
+    if last and last[:2] == (full_name, username) and now - last[2] < 1800:
+        return
+    statements = []
     if username:  # Telegram'da username boshqa odamga o'tgan bo'lishi mumkin - qidiruv adashmasin
-        await _execute("UPDATE users SET username = NULL WHERE LOWER(username) = LOWER(?) AND telegram_id != ?",
-                       (username, telegram_id))
-    await _execute(
+        statements.append(("UPDATE users SET username = NULL WHERE LOWER(username) = LOWER(?) AND telegram_id != ?",
+                           (username, telegram_id)))
+    statements.append((
         """INSERT INTO users (telegram_id, full_name, username) VALUES (?, ?, ?)
            ON CONFLICT(telegram_id) DO UPDATE SET full_name = excluded.full_name, username = excluded.username""",
         (telegram_id, full_name, username),
-    )
+    ))
+    await _execute_many(statements)
+    _saved_users[telegram_id] = (full_name, username, now)
+
+
+async def ping() -> float:
+    """Bazaga bitta so'rov necha soniyada borib kelishi (/status uchun)."""
+    t = time.perf_counter()
+    await _fetchone("SELECT 1 AS x")
+    return time.perf_counter() - t
 
 
 async def get_user(telegram_id: int):

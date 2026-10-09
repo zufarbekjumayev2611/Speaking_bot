@@ -1,13 +1,16 @@
 """Bot + mini app serverini BITTA jarayonda ishga tushiradi (Render Web Service).
-MUHIM: shu botni faqat BITTA joyda ishga tushiring - aks holda TelegramConflictError
-(xabarlar ikki nusxa orasida bo'linib, bot "bir safar bor, bir safar yo'q" deb javob beradi).
-Ikkinchi nusxa paydo bo'lsa, bot adminlarga o'zi xabar beradi (ops.py)."""
+
+Render Web Service'da bot webhook orqali ishlaydi: Telegram har bir xabarni shu serverga o'zi yuboradi
+(so'rab turish yo'q - tez, ikki nusxa bir-biri bilan urishib qotib qolmaydi). Background Worker'da
+(BOT_MODE=off standart) bot umuman yurgizilmaydi - u kerak emas, uni o'chirish mumkin.
+Kompyuterda (Render'dan tashqarida) bot eskicha polling bilan ishlaydi."""
 import asyncio
 import logging
 import signal
 
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import SimpleEventIsolation
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler
 from aiohttp import ClientTimeout
 from aiohttp import web
 
@@ -16,7 +19,7 @@ import ops
 from bot import router
 from broadcast import reminder_loop, router as broadcast_router
 from premium import BlockMiddleware, router as premium_router
-from config import BOT_TOKEN, PORT, WEBAPP_URL
+from config import BOT_MODE, BOT_TOKEN, PORT, WEBAPP_URL
 from fsm_storage import DbStorage
 from netclient import close_session, get_session
 from web import create_app
@@ -55,50 +58,79 @@ async def _stop(dp: Dispatcher):
 
 
 async def main():
+    shutdown = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    dp_ref: list[Dispatcher] = []
+
+    def on_signal():  # Render to'xtatganda (deploy / restart) - qaysi rejimda bo'lsa ham chiqamiz
+        shutdown.set()
+        if dp_ref and BOT_MODE == "polling":
+            asyncio.ensure_future(_stop(dp_ref[0]))
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, on_signal)
+        except (NotImplementedError, RuntimeError):
+            pass
+
+    if BOT_MODE == "off":
+        logging.warning("BOT_MODE=off: bu servis botni yurgizmaydi (bot Web Service'da webhook orqali ishlaydi). "
+                        "Bu servis kerak emas - Render'da uni o'chirib qo'yishingiz mumkin.")
+        await shutdown.wait()
+        return
+
     await db.init_db()
     logging.info("Ma'lumotlar bazasi: %s", db.backend_name())
     await db.load_admins()
     await db.load_blocked()
     bot = Bot(token=BOT_TOKEN)
     dp = build_dispatcher(bot)
+    dp_ref.append(dp)
 
-    runner = web.AppRunner(create_app(bot))
+    app = create_app(bot)
+    hook = None
+    if BOT_MODE == "webhook":
+        hook = SimpleRequestHandler(dispatcher=dp, bot=bot, secret_token=ops.WEBHOOK_SECRET)
+        hook.register(app, path=ops.WEBHOOK_PATH)
+    runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
-    logging.info("Mini app server: port %s", PORT)
+    logging.info("Mini app server: port %s, bot rejimi: %s", PORT, BOT_MODE)
 
     asyncio.create_task(keep_alive())
     asyncio.create_task(reminder_loop(bot))
-    await bot.delete_webhook(drop_pending_updates=False)
-    await ops.take_leadership()   # yangi nusxa boshqaruvni oladi; eski nusxa 15 soniyada o'zi to'xtaydi
-    await ops.startup(bot)
-    asyncio.create_task(ops.refresh_loop())
-    asyncio.create_task(ops.leader_loop(bot, dp))
-    shutdown = asyncio.Event()
-
-    def on_signal():  # Render to'xtatganda (deploy / restart) - faol bo'lsa ham, kutishda bo'lsa ham chiqamiz
-        shutdown.set()
-        asyncio.ensure_future(_stop(dp))
-
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        try:
-            asyncio.get_running_loop().add_signal_handler(sig, on_signal)
-        except (NotImplementedError, RuntimeError):
-            pass
     try:
-        while not shutdown.is_set():
-            await dp.start_polling(bot, handle_signals=False)
-            if shutdown.is_set() or not ops.leader.stepped_down:
-                break
-            # boshqa nusxa faol - u to'xtaguncha kutamiz (mini app serveri ishlashda davom etadi)
-            waiters = [asyncio.ensure_future(ops.leader.regained.wait()), asyncio.ensure_future(shutdown.wait())]
-            await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
-            for w in waiters:
-                w.cancel()
-            ops.leader.stepped_down = False
+        if BOT_MODE == "webhook":
+            await ops.set_webhook(bot, dp)
+            ops.leader.active = True
+            await ops.startup(bot)
+            asyncio.create_task(ops.refresh_loop())
+            asyncio.create_task(ops.webhook_watch(bot, dp))
+            await shutdown.wait()
+            # webhook o'chirilmaydi: yangi nusxa (deploy) xabarlarni shu manzilda qabul qilishda davom etadi
+        else:
+            await bot.delete_webhook(drop_pending_updates=False)
+            await ops.take_leadership()   # yangi nusxa boshqaruvni oladi; eski nusxa 15 soniyada o'zi to'xtaydi
+            await ops.startup(bot)
+            asyncio.create_task(ops.refresh_loop())
+            asyncio.create_task(ops.leader_loop(bot, dp))
+            while not shutdown.is_set():
+                await dp.start_polling(bot, handle_signals=False)
+                if shutdown.is_set() or not ops.leader.stepped_down:
+                    break
+                # boshqa nusxa faol - u to'xtaguncha kutamiz (mini app serveri ishlashda davom etadi)
+                waiters = [asyncio.ensure_future(ops.leader.regained.wait()), asyncio.ensure_future(shutdown.wait())]
+                await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+                for w in waiters:
+                    w.cancel()
+                ops.leader.stepped_down = False
     finally:
+        if hook and hook._background_feed_update_tasks:  # qabul qilingan xabarlar oxirigacha ishlansin
+            await asyncio.wait(list(hook._background_feed_update_tasks), timeout=15)
         await ops.drain_background()  # deploy paytida boshlangan yazma tekshiruvlari tugasin
         await ops.release_leadership()
+        await runner.cleanup()
+        await bot.session.close()
         await close_session()
         await db.close_db()
 
