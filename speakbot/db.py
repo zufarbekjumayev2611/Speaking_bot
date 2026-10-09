@@ -878,7 +878,34 @@ async def user_results(telegram_id: int, limit: int = 5):
     )
 
 
-# ---------- Imtihonni qayta nomlash / nusxalash ----------
+_MY_RESULTS = """SELECT * FROM (
+       SELECT 'speaking' AS kind, a.id, a.score, a.level, a.result_json, a.created_at, e.title, e.part
+       FROM attempts a LEFT JOIN exams e ON e.id = a.exam_id
+       WHERE a.telegram_id = ?1 AND a.status = 'done'
+       UNION ALL
+       SELECT 'writing' AS kind, w.id, w.score, w.level, w.result_json, w.created_at, e.title, e.part
+       FROM writing_submissions w LEFT JOIN exams e ON e.id = w.exam_id
+       WHERE w.telegram_id = ?1 AND w.status = 'done'
+   )"""
+
+
+async def my_results(telegram_id: int, limit: int, offset: int = 0):
+    """O'quvchining o'z natijalari (eng yangisi oldin) - «📊 Natijalarim» uchun."""
+    return await _fetchall(_MY_RESULTS + " ORDER BY created_at DESC, id DESC LIMIT ?2 OFFSET ?3",
+                           (telegram_id, limit, offset))
+
+
+async def my_result_counts(telegram_id: int) -> dict:
+    rows = await _fetchall(f"SELECT kind, COUNT(*) AS c FROM ({_MY_RESULTS}) GROUP BY kind", (telegram_id,))
+    return {r["kind"]: r["c"] for r in rows}
+
+
+async def my_result(telegram_id: int, kind: str, result_id: int):
+    """Bitta natija - faqat egasiga (boshqa odamning natijasini ochib bo'lmaydi)."""
+    return await _fetchone(_MY_RESULTS + " WHERE kind = ?2 AND id = ?3", (telegram_id, kind, result_id))
+
+
+# ---------- Imtihonni qayta nomlash ----------
 
 async def rename_exam(exam_id: int, title: str):
     await _execute("UPDATE exams SET title = ? WHERE id = ?", (title, exam_id))

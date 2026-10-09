@@ -65,6 +65,9 @@ def _date(stamp: str | None) -> str:
     return dt.strftime("%d.%m.%Y %H:%M") if dt else "—"
 
 
+local_date = _date  # bot.py dan ham ishlatiladi
+
+
 def score(r: dict) -> tuple[str, float]:
     """(ko'rinishi, foizi 0..1) - eng yaxshi natijani tanlash uchun foiz ishlatiladi."""
     try:

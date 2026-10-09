@@ -50,6 +50,7 @@ WRITING_NAME = LANG["writing_name"]     # turkcha: "Yazma"
 BTN_SPEAKING = f"🎙 {SPEAKING_NAME}"
 BTN_WRITING = f"✍️ {WRITING_NAME}"
 BTN_ADMIN = "⚙️ Admin panel"
+BTN_RESULTS = "📊 Natijalarim"
 # eski klaviaturalar (bot yangilanishidan oldin chiqqan tugmalar) ham ishlashi uchun
 OLD_SPEAKING_BUTTONS = {"🎙 Imtihon topshirish", "🎙 Speaking"}
 OLD_WRITING_BUTTONS = {"✍️ Writing"}
@@ -101,11 +102,10 @@ def _part_from_key(key: str) -> str | None:
 
 
 def main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
-    rows = [[KeyboardButton(text=BTN_SPEAKING), KeyboardButton(text=BTN_WRITING)]]
-    bottom = [KeyboardButton(text=BTN_PREMIUM)]
+    rows = [[KeyboardButton(text=BTN_SPEAKING), KeyboardButton(text=BTN_WRITING)],
+            [KeyboardButton(text=BTN_RESULTS), KeyboardButton(text=BTN_PREMIUM)]]
     if is_admin(user_id):
-        bottom.append(KeyboardButton(text=BTN_ADMIN))
-    rows.append(bottom)
+        rows.append([KeyboardButton(text=BTN_ADMIN)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
@@ -140,6 +140,77 @@ async def cmd_cancel(message: Message, state: FSMContext):
 @router.message(Command("premium", "tarif"))
 async def menu_premium(message: Message, state: FSMContext):
     await premium_info(message, state)
+
+
+# ---------- 📊 Natijalarim: o'quvchi o'z natijalarini ko'radi ----------
+
+MY_PER_PAGE = 8
+_KIND_CODE = {"speaking": "s", "writing": "w"}
+
+
+async def _my_results_view(user_id: int, page: int):
+    rows = await db.my_results(user_id, MY_PER_PAGE + 1, page * MY_PER_PAGE)
+    has_next = len(rows) > MY_PER_PAGE
+    rows = rows[:MY_PER_PAGE]
+    if not rows and page == 0:
+        return ("📊 <b>Natijalarim</b>\n\nHali natijangiz yo'q. «🎙 Konuşma» yoki «✍️ Yazma» bo'limidan test "
+                "topshiring — natija shu yerda saqlanadi."), None
+    counts = await db.my_result_counts(user_id)
+    lines = ["📊 <b>Natijalarim</b>",
+             f"Jami: {KIND_ICON['speaking']} {SPEAKING_NAME} — <b>{counts.get('speaking', 0)}</b> ta • "
+             f"{KIND_ICON['writing']} {WRITING_NAME} — <b>{counts.get('writing', 0)}</b> ta\n"]
+    buttons = []
+    for i, r in enumerate(rows, page * MY_PER_PAGE + 1):
+        sc, _ = report.score(r)
+        part = part_info(r["kind"], r.get("part"))["name"].split(" — ")[0]
+        level = f" ({e(r['level'])})" if r.get("level") else ""
+        lines.append(f"<b>{i}.</b> {report.local_date(r['created_at'])} • {KIND_ICON.get(r['kind'], '')} {e(part)} • "
+                     f"{e(r.get('title') or 'o‘chirilgan test')}\n    🎯 <b>{e(sc)}</b>{level}")
+        buttons.append(InlineKeyboardButton(text=f"🔍 {i}", callback_data=f"mr:{_KIND_CODE[r['kind']]}:{r['id']}"))
+    lines.append("\n🔍 — natijani to'liq ko'rish (xatolar va tavsiyalar bilan).")
+    kb = [buttons[i:i + 4] for i in range(0, len(buttons), 4)]
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="◀️ Yangiroq", callback_data=f"mrp:{page - 1}"))
+    if has_next:
+        nav.append(InlineKeyboardButton(text="Eskiroq ▶️", callback_data=f"mrp:{page + 1}"))
+    if nav:
+        kb.append(nav)
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=kb)
+
+
+@router.message(F.text == BTN_RESULTS)
+@router.message(Command("natijalar", "results"))
+async def my_results(message: Message):
+    text, kb = await _my_results_view(message.from_user.id, 0)
+    await message.answer(text, parse_mode="HTML", reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("mrp:"))
+async def my_results_page(callback: CallbackQuery):
+    text, kb = await _my_results_view(callback.from_user.id, max(0, int(callback.data.split(":")[1])))
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mr:"))
+async def my_result_open(callback: CallbackQuery):
+    _, code, rid = callback.data.split(":")
+    kind = {v: k for k, v in _KIND_CODE.items()}.get(code)
+    r = await db.my_result(callback.from_user.id, kind, int(rid)) if kind else None
+    if not r:
+        return await callback.answer("Natija topilmadi.", show_alert=True)
+    await callback.answer()
+    try:
+        res = json.loads(r["result_json"] or "{}")
+        res.setdefault("kind", kind)
+        part_name = res.get("part_name") or part_info(kind, r.get("part"))["name"]
+        text = grader.result_message(r.get("title") or "o‘chirilgan test", part_name, res)
+    except (ValueError, KeyError, TypeError):
+        sc, _ = report.score(r)
+        text = f"{KIND_ICON.get(kind, '')} <b>{e(r.get('title') or 'Test')}</b>\n🎯 {e(sc)} ({e(r.get('level') or '')})"
+    text = f"📅 {report.local_date(r['created_at'])}\n" + text
+    await grader.send_long(callback.bot, callback.from_user.id, text)
 
 
 @router.message(Command("status"))
