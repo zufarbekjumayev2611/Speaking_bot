@@ -1,6 +1,7 @@
 """SQLite baza: imtihonlar (speaking/writing), savollar, urinishlar, javoblar, writing ishlari."""
 import json
 import os
+import time
 from datetime import datetime, timedelta, timezone
 
 import aiosqlite
@@ -78,6 +79,12 @@ CREATE TABLE IF NOT EXISTS premium_log (
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT
+);
+CREATE TABLE IF NOT EXISTS bot_lock (
+    id INTEGER PRIMARY KEY,
+    instance TEXT,
+    service TEXT,
+    heartbeat TEXT
 );
 CREATE TABLE IF NOT EXISTS fsm_state (
     key TEXT PRIMARY KEY,
@@ -285,15 +292,43 @@ async def _execute(sql, params=()) -> int:
 
 # ---------- Foydalanuvchilar ----------
 
+_saved_users: dict[int, tuple] = {}  # oxirgi yozilgan ism/username - o'zgarmagan bo'lsa bazaga qayta borilmaydi
+
+
+async def _execute_many(statements: list[tuple[str, tuple]]):
+    """Bir nechta yozuv - Turso'ga BITTA so'rovda (har so'rov ~0.1-0.3 s)."""
+    if _turso:
+        await _turso.batch(statements)
+        return
+    db = await _get()
+    for sql, params in statements:
+        await db.execute(sql, params)
+    await db.commit()
+
+
 async def save_user(telegram_id: int, full_name: str, username: str | None):
+    now = time.time()
+    last = _saved_users.get(telegram_id)
+    if last and last[:2] == (full_name, username) and now - last[2] < 1800:
+        return
+    statements = []
     if username:  # Telegram'da username boshqa odamga o'tgan bo'lishi mumkin - qidiruv adashmasin
-        await _execute("UPDATE users SET username = NULL WHERE LOWER(username) = LOWER(?) AND telegram_id != ?",
-                       (username, telegram_id))
-    await _execute(
+        statements.append(("UPDATE users SET username = NULL WHERE LOWER(username) = LOWER(?) AND telegram_id != ?",
+                           (username, telegram_id)))
+    statements.append((
         """INSERT INTO users (telegram_id, full_name, username) VALUES (?, ?, ?)
            ON CONFLICT(telegram_id) DO UPDATE SET full_name = excluded.full_name, username = excluded.username""",
         (telegram_id, full_name, username),
-    )
+    ))
+    await _execute_many(statements)
+    _saved_users[telegram_id] = (full_name, username, now)
+
+
+async def ping() -> float:
+    """Bazaga bitta so'rov necha soniyada borib kelishi (/status uchun)."""
+    t = time.perf_counter()
+    await _fetchone("SELECT 1 AS x")
+    return time.perf_counter() - t
 
 
 async def get_user(telegram_id: int):
@@ -386,6 +421,41 @@ async def get_question(question_id: int):
 
 async def delete_question(question_id: int):
     await _execute("DELETE FROM questions WHERE id = ?", (question_id,))
+
+
+_QUESTION_FIELDS = {"text", "photo_file_id", "prep_sec", "answer_sec"}
+
+
+async def update_question(question_id: int, **fields):
+    """Savolning matni / rasmi / vaqtlarini o'zgartirish (faqat berilgan maydonlar)."""
+    cols = [c for c in fields if c in _QUESTION_FIELDS]
+    if cols:
+        await _execute(f"UPDATE questions SET {', '.join(c + ' = ?' for c in cols)} WHERE id = ?",
+                       tuple(fields[c] for c in cols) + (question_id,))
+
+
+async def set_exam_times(exam_id: int, prep_sec: int | None = None, answer_sec: int | None = None):
+    """Testdagi BARCHA savollar uchun bir xil vaqt."""
+    if prep_sec is not None:
+        await _execute("UPDATE questions SET prep_sec = ? WHERE exam_id = ?", (prep_sec, exam_id))
+    if answer_sec is not None:
+        await _execute("UPDATE questions SET answer_sec = ? WHERE exam_id = ?", (answer_sec, exam_id))
+
+
+async def move_question(question_id: int, delta: int) -> bool:
+    """Savolni tartibda bir pog'ona yuqoriga (-1) yoki pastga (+1) surish."""
+    q = await get_question(question_id)
+    if not q:
+        return False
+    qs = await get_questions(q["exam_id"])
+    i = next(i for i, x in enumerate(qs) if x["id"] == question_id)
+    j = i + delta
+    if not 0 <= j < len(qs):
+        return False
+    order = [x["id"] for x in qs]
+    order[i], order[j] = order[j], order[i]
+    await _execute_many([("UPDATE questions SET position = ? WHERE id = ?", (n, qid)) for n, qid in enumerate(order, 1)])
+    return True
 
 
 async def get_writing_task(exam_id: int):
@@ -509,6 +579,28 @@ async def recent_results(limit: int = 20, offset: int = 0):
                WHERE w.status = 'done'
            ) ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?""",
         (limit, offset),
+    )
+
+
+async def results_report(days: int | None = None):
+    """PDF hisobot uchun: barcha tugallangan natijalar (o'quvchi ma'lumoti bilan), eng yangisi oldin."""
+    since = f"AND {{t}}.created_at >= datetime('now', '-{int(days)} days')" if days else ""
+    return await _fetchall(
+        f"""SELECT * FROM (
+               SELECT 'speaking' AS kind, a.id, a.telegram_id, a.score, a.level, a.result_json, a.created_at,
+                      u.full_name, u.username, e.title, e.part
+               FROM attempts a
+               LEFT JOIN users u ON u.telegram_id = a.telegram_id
+               LEFT JOIN exams e ON e.id = a.exam_id
+               WHERE a.status = 'done' {since.format(t='a')}
+               UNION ALL
+               SELECT 'writing' AS kind, w.id, w.telegram_id, w.score, w.level, w.result_json, w.created_at,
+                      u.full_name, u.username, e.title, e.part
+               FROM writing_submissions w
+               LEFT JOIN users u ON u.telegram_id = w.telegram_id
+               LEFT JOIN exams e ON e.id = w.exam_id
+               WHERE w.status = 'done' {since.format(t='w')}
+           ) ORDER BY created_at DESC, id DESC"""
     )
 
 
@@ -784,16 +876,6 @@ async def rename_exam(exam_id: int, title: str):
     await _execute("UPDATE exams SET title = ? WHERE id = ?", (title, exam_id))
 
 
-async def duplicate_exam(exam_id: int) -> int | None:
-    exam = await get_exam(exam_id)
-    if not exam:
-        return None
-    new_id = await create_exam(f"{exam['title']} (nusxa)"[:100], exam.get("kind") or "speaking", exam.get("part"))
-    for q in await get_questions(exam_id):
-        await add_question(new_id, q["text"], q["photo_file_id"], q["prep_sec"], q["answer_sec"], q.get("meta"))
-    return new_id
-
-
 # ---------- Foydalanuvchilar ro'yxati (admin uchun) ----------
 
 async def count_users() -> int:
@@ -814,14 +896,6 @@ async def list_users(offset: int = 0, limit: int = 8):
 
 # ---------- Hamma testlarni o'chirish ----------
 
-async def delete_all_exams() -> int:
-    """Barcha imtihon/mavzularni va ularning savollarini o'chiradi (natijalar tarixi saqlanadi). Soni qaytadi."""
-    n = (await _fetchone("SELECT COUNT(*) AS c FROM exams"))["c"]
-    await _execute("DELETE FROM questions")
-    await _execute("DELETE FROM exams")
-    return n
-
-
 # ---------- Bot holati (FSM): ko'p bosqichli amallar qayta ishga tushganda ham davom etadi ----------
 
 async def fsm_get(key: str):
@@ -837,3 +911,28 @@ async def fsm_set(key: str, state: str | None, data: str):
            ON CONFLICT(key) DO UPDATE SET state = excluded.state, data = excluded.data, updated_at = excluded.updated_at""",
         (key, state, data),
     )
+
+
+# ---------- Yagona faol nusxa: Telegram'dan xabarlarni faqat bitta bot nusxasi oladi ----------
+
+async def lock_take(instance: str, service: str):
+    await _execute(
+        """INSERT INTO bot_lock (id, instance, service, heartbeat) VALUES (1, ?, ?, datetime('now'))
+           ON CONFLICT(id) DO UPDATE SET instance = excluded.instance, service = excluded.service,
+                                         heartbeat = excluded.heartbeat""",
+        (instance, service),
+    )
+
+
+async def lock_get():
+    return await _fetchone(
+        "SELECT instance, service, heartbeat, (julianday('now') - julianday(heartbeat)) * 86400 AS age FROM bot_lock WHERE id = 1"
+    )
+
+
+async def lock_beat(instance: str):
+    await _execute("UPDATE bot_lock SET heartbeat = datetime('now') WHERE id = 1 AND instance = ?", (instance,))
+
+
+async def lock_release(instance: str):
+    await _execute("UPDATE bot_lock SET heartbeat = '2000-01-01 00:00:00' WHERE id = 1 AND instance = ?", (instance,))

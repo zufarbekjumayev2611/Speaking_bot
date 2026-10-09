@@ -9,6 +9,8 @@
 - /status (admin) - server, baza va asosiy sonlar.
 """
 import asyncio
+import hashlib
+import html
 import logging
 import os
 import re
@@ -28,9 +30,18 @@ from config import WEBAPP_URL, WEBAPP_URL_ENV, WEBAPP_URL_IGNORED, all_admin_ids
 log = logging.getLogger("ops")
 
 STARTED = time.time()
-INSTANCE = os.getenv("RENDER_INSTANCE_ID") or socket.gethostname()
+INSTANCE = os.getenv("RENDER_INSTANCE_ID") or f"{socket.gethostname()}-{os.getpid()}"
+SERVICE = os.getenv("RENDER_SERVICE_NAME") or os.getenv("RENDER_SERVICE_ID") or socket.gethostname()
+SERVICE_TYPE = os.getenv("RENDER_SERVICE_TYPE", "")
 VERSION = (os.getenv("RENDER_GIT_COMMIT") or "")[:7] or "lokal"
 TOUCH_EVERY = 1800  # foydalanuvchi ma'lumotini bazada yangilash oralig'i (s)
+
+# Webhook manzili tokendan hosil qilinadi (tashqaridan topib bo'lmaydi); Telegram har so'rovda maxfiy kalitni yuboradi.
+_H = hashlib.sha256(("speakbot-webhook:" + config.BOT_TOKEN).encode()).hexdigest()
+WEBHOOK_PATH = f"/tg/{_H[:24]}"
+WEBHOOK_SECRET = _H[24:64]
+WEBHOOK_URL = WEBAPP_URL + WEBHOOK_PATH
+WEBHOOK_CHECK = 60  # webhook joyidami - shuncha soniyada bir tekshiriladi
 
 
 def warnings() -> list[str]:
@@ -49,8 +60,26 @@ def warnings() -> list[str]:
     return out
 
 
+def _db_line() -> str:
+    if config.TURSO_URL:
+        host = re.sub(r"^\w+://", "", config.TURSO_URL).split("/")[0]
+        return f"Turso (<code>{host}</code>)"
+    return db.backend_name()
+
+
+def _mode_text() -> str:
+    if config.BOT_MODE == "webhook":
+        return "webhook"
+    if config.BOT_MODE == "off":
+        return "bot o'chirilgan (BOT_MODE=off)"
+    return "polling, faol" if leader.active else "polling, kutish rejimida"
+
+
 def instance_line() -> str:
-    lines = [f"Server: <code>{INSTANCE}</code> • versiya: <code>{VERSION}</code> • baza: <b>{db.backend_name()}</b>",
+    kind = f" ({SERVICE_TYPE})" if SERVICE_TYPE else ""
+    lines = [f"Servis: <b>{SERVICE}</b>{kind} • versiya: <code>{VERSION}</code>",
+             f"Nusxa: <code>{INSTANCE}</code> • {_mode_text()}",
+             f"Baza: <b>{_db_line()}</b>",
              f"Mini app: <code>{WEBAPP_URL}</code> • adminlar: <code>{', '.join(map(str, config.ADMIN_IDS)) or '-'}</code>"]
     return "\n".join(lines + warnings())
 
@@ -127,9 +156,21 @@ async def status(message: Message):
     by_kind = {r["kind"]: r for r in exams}
     sp, wr = by_kind.get("speaking", {}), by_kind.get("writing", {})
     up = int(time.time() - STARTED)
+    speed = f"Baza javobi: <b>{await db.ping() * 1000:.0f} ms</b>"
+    if config.BOT_MODE == "webhook":
+        try:
+            info = await message.bot.get_webhook_info()
+            speed += f" • navbatda: {info.pending_update_count} xabar"
+            if info.url != WEBHOOK_URL:
+                speed += "\n⚠️ Webhook boshqa manzilga o'rnatilgan — boshqa joyda eski bot ishlayapti"
+            elif info.last_error_message and info.last_error_date and time.time() - info.last_error_date.timestamp() < 600:
+                speed += f"\n⚠️ Oxirgi xato: {html.escape(info.last_error_message)}"
+        except Exception:
+            pass
     await message.answer(
         "🩺 <b>Holat</b>\n"
         f"{instance_line()}\n"
+        f"{speed}\n"
         f"Ishlayapti: {up // 3600} soat {up % 3600 // 60} daqiqa\n\n"
         f"👥 Foydalanuvchilar: <b>{users}</b>\n"
         f"🎙 Konuşma testlari: <b>{sp.get('open') or 0}</b> ochiq / {sp.get('total') or 0}\n"
@@ -190,9 +231,108 @@ class ConflictWatcher(logging.Handler):
 
 
 async def startup(bot):
-    for w in warnings():
+    """Adminlarga faqat muammo bo'lsa yoziladi (har deployda "ishga tushdi" xabari yuborilmaydi)."""
+    problems = warnings()
+    for w in problems:
         log.error(re.sub(r"<[^>]+>", "", w))
-    await _notify_admins(bot, f"🟢 <b>Bot ishga tushdi</b>\n{instance_line()}\nTekshirish: /status")
+    log.info("Ishga tushdi: %s", re.sub(r"<[^>]+>", "", instance_line()))
+    if problems:
+        await _notify_admins(bot, "⚠️ <b>Sozlamada muammo</b>\n" + "\n".join(problems) + "\nTekshirish: /status")
+
+
+# ---------------------------------------------------------------- yagona faol nusxa
+
+class _Leader:
+    """Telegram'dan xabarlarni faqat bitta nusxa oladi (bazadagi bot_lock orqali).
+    Yangi ishga tushgan nusxa boshqaruvni oladi (deploy), eskisi o'zi to'xtaydi - ikki bot
+    bir-biri bilan urishib (TelegramConflictError) qotib qolmaydi va javoblar ikki marta kelmaydi."""
+    BEAT = 15     # har necha soniyada tekshiriladi
+    LEASE = 60    # shuncha vaqt yurak urishi bo'lmasa - nusxa o'lgan hisoblanadi
+
+    def __init__(self):
+        self.active = False
+        self.stepped_down = False
+        self.regained = asyncio.Event()
+
+
+leader = _Leader()
+
+
+async def take_leadership():
+    await db.lock_take(INSTANCE, SERVICE)
+    leader.active = True
+
+
+async def leader_loop(bot, dp):
+    warned_for = None
+    while True:
+        await asyncio.sleep(leader.BEAT)
+        try:
+            row = await db.lock_get()
+            if leader.active:
+                if row and row["instance"] != INSTANCE:
+                    leader.active = False
+                    leader.stepped_down = True
+                    leader.regained.clear()
+                    log.warning("Boshqa nusxa (%s / %s) faol bo'ldi - bu nusxa kutish rejimiga o'tdi", row["service"], row["instance"])
+                    if row["service"] != SERVICE and warned_for != row["service"]:
+                        warned_for = row["service"]
+                        await _notify_admins(bot, (
+                            "⚠️ <b>Bot ikkita servisda ishga tushirilgan!</b>\n"
+                            f"Faol: <b>{row['service']}</b>. Kutish rejimiga o'tdi: <b>{SERVICE}</b>.\n"
+                            "Ikkalasi kerak emas — Render'da keraksizini o'chiring (Settings → Delete / Suspend)."
+                        ))
+                    try:
+                        await dp.stop_polling()
+                    except RuntimeError:
+                        pass
+                else:
+                    await db.lock_beat(INSTANCE)
+            elif not row or (row.get("age") or 0) > leader.LEASE:
+                # faol nusxa to'xtagan - boshqaruvni olamiz
+                await db.lock_take(INSTANCE, SERVICE)
+                leader.active = True
+                leader.regained.set()
+                log.info("Faol nusxa javob bermadi - bu nusxa boshqaruvni oldi")
+        except Exception:
+            log.warning("Yetakchilikni tekshirib bo'lmadi", exc_info=True)
+
+
+async def set_webhook(bot, dp):
+    await bot.set_webhook(WEBHOOK_URL, secret_token=WEBHOOK_SECRET, allowed_updates=dp.resolve_used_update_types(),
+                          drop_pending_updates=False, max_connections=40)
+    log.info("Webhook o'rnatildi: %s/tg/…", WEBAPP_URL)
+
+
+async def webhook_watch(bot, dp):
+    """Har daqiqada: webhook bizning manzilda turibdimi. Boshqa joyda eski (polling) bot ishga tushib
+    webhookni o'chirib qo'ysa - qayta o'rnatamiz va adminlarga bir marta aytamiz."""
+    warned = False
+    while True:
+        await asyncio.sleep(WEBHOOK_CHECK)
+        try:
+            info = await bot.get_webhook_info()
+            if info.url == WEBHOOK_URL:
+                continue
+            log.warning("Webhook o'zgartirilgan (%r) - qayta o'rnatilmoqda", info.url)
+            await set_webhook(bot, dp)
+            if not warned:
+                warned = True
+                await _notify_admins(bot, (
+                    "⚠️ <b>Shu token bilan boshqa joyda ham bot ishlayapti</b> (eski servis, Background Worker yoki "
+                    "kompyuterdagi nusxa) va u botni o'ziga tortib oldi. Bot qayta tiklandi, lekin o'sha nusxani "
+                    f"o'chiring.\nBu nusxa — {instance_line()}"
+                ))
+        except Exception:
+            log.warning("Webhookni tekshirib bo'lmadi", exc_info=True)
+
+
+async def release_leadership():
+    if leader.active:
+        try:
+            await db.lock_release(INSTANCE)
+        except Exception:
+            pass
 
 
 async def refresh_loop():

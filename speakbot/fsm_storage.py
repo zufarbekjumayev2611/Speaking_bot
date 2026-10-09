@@ -15,6 +15,7 @@ import db
 
 
 TTL = 12 * 3600  # 12 soatdan beri tegilmagan yarim qolgan amal unutiladi (keyingi xabar eski amalga ketmasin)
+FRESH = 30       # xotiradagi nusxa necha soniya ishlatiladi (deploy paytida ikki nusxa bo'lsa ham chalkashmasin)
 
 
 def _age(updated_at: str | None) -> float:
@@ -36,8 +37,8 @@ class DbStorage(BaseStorage):
 
     async def _load(self, key: StorageKey) -> tuple[str, tuple[str | None, dict]]:
         k = _key(key)
-        if k in self._cache and time.time() - self._touched.get(k, 0) > TTL and self._cache[k] != (None, {}):
-            await self._save(k, None, {})  # eskirgan
+        if k in self._cache and time.time() - self._touched.get(k, 0) > FRESH:
+            del self._cache[k]  # xotiradagi nusxa faqat qisqa vaqt ishonchli - keyin bazadan qayta o'qiladi
         if k not in self._cache:
             row = await db.fsm_get(k)
             state, data = (row.get("state"), row.get("data")) if row else (None, None)

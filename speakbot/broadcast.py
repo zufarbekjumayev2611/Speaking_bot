@@ -88,7 +88,7 @@ async def bc_text(message: Message, state: FSMContext):
     if data.get("audience") not in AUDIENCES:
         await state.clear()
         return await message.answer("Jarayon uzilib qolgan. «📣 Xabar yuborish» bo'limidan qaytadan boshlang.")
-    count = len(await db.broadcast_ids(data["audience"]))
+    count = len([uid for uid in await db.broadcast_ids(data["audience"]) if uid != message.from_user.id])
     preview = await message.answer(
         f"👀 <b>Ko'rinishi:</b>\n\n{_esc(text)}\n\n— — —\n{AUDIENCES[data['audience']]}: <b>{count}</b> kishiga yuboriladi. Tasdiqlaysizmi?",
         parse_mode="HTML",
@@ -114,8 +114,13 @@ async def bc_go(callback: CallbackQuery, state: FSMContext):
     if _running:
         return await callback.answer("Oldingi xabar hali yuborilmoqda.", show_alert=True)
     await state.clear()
-    ids = await db.broadcast_ids(data["audience"])
-    await callback.message.edit_text(f"📤 Yuborish boshlandi: {len(ids)} kishi. Tugagach natijani yozaman.")
+    # yuborayotgan admin matnni ko'rinishda ko'rdi - unga qayta yuborilmaydi
+    ids = [uid for uid in await db.broadcast_ids(data["audience"]) if uid != callback.from_user.id]
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await callback.message.answer(f"📤 Yuborish boshlandi: {len(ids)} kishi. Tugagach natijani yozaman.")
     await callback.answer()
     _running = True
     asyncio.create_task(_send_all(callback.bot, callback.from_user.id, ids, data["bc_text"]))
