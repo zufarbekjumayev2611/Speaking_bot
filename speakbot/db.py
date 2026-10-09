@@ -423,6 +423,41 @@ async def delete_question(question_id: int):
     await _execute("DELETE FROM questions WHERE id = ?", (question_id,))
 
 
+_QUESTION_FIELDS = {"text", "photo_file_id", "prep_sec", "answer_sec"}
+
+
+async def update_question(question_id: int, **fields):
+    """Savolning matni / rasmi / vaqtlarini o'zgartirish (faqat berilgan maydonlar)."""
+    cols = [c for c in fields if c in _QUESTION_FIELDS]
+    if cols:
+        await _execute(f"UPDATE questions SET {', '.join(c + ' = ?' for c in cols)} WHERE id = ?",
+                       tuple(fields[c] for c in cols) + (question_id,))
+
+
+async def set_exam_times(exam_id: int, prep_sec: int | None = None, answer_sec: int | None = None):
+    """Testdagi BARCHA savollar uchun bir xil vaqt."""
+    if prep_sec is not None:
+        await _execute("UPDATE questions SET prep_sec = ? WHERE exam_id = ?", (prep_sec, exam_id))
+    if answer_sec is not None:
+        await _execute("UPDATE questions SET answer_sec = ? WHERE exam_id = ?", (answer_sec, exam_id))
+
+
+async def move_question(question_id: int, delta: int) -> bool:
+    """Savolni tartibda bir pog'ona yuqoriga (-1) yoki pastga (+1) surish."""
+    q = await get_question(question_id)
+    if not q:
+        return False
+    qs = await get_questions(q["exam_id"])
+    i = next(i for i, x in enumerate(qs) if x["id"] == question_id)
+    j = i + delta
+    if not 0 <= j < len(qs):
+        return False
+    order = [x["id"] for x in qs]
+    order[i], order[j] = order[j], order[i]
+    await _execute_many([("UPDATE questions SET position = ? WHERE id = ?", (n, qid)) for n, qid in enumerate(order, 1)])
+    return True
+
+
 async def get_writing_task(exam_id: int):
     """Writing mavzusining topshirig'i (bitta qator) yoki None."""
     return await _fetchone("SELECT * FROM questions WHERE exam_id = ? ORDER BY position, id LIMIT 1", (exam_id,))
@@ -544,6 +579,28 @@ async def recent_results(limit: int = 20, offset: int = 0):
                WHERE w.status = 'done'
            ) ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?""",
         (limit, offset),
+    )
+
+
+async def results_report(days: int | None = None):
+    """PDF hisobot uchun: barcha tugallangan natijalar (o'quvchi ma'lumoti bilan), eng yangisi oldin."""
+    since = f"AND {{t}}.created_at >= datetime('now', '-{int(days)} days')" if days else ""
+    return await _fetchall(
+        f"""SELECT * FROM (
+               SELECT 'speaking' AS kind, a.id, a.telegram_id, a.score, a.level, a.result_json, a.created_at,
+                      u.full_name, u.username, e.title, e.part
+               FROM attempts a
+               LEFT JOIN users u ON u.telegram_id = a.telegram_id
+               LEFT JOIN exams e ON e.id = a.exam_id
+               WHERE a.status = 'done' {since.format(t='a')}
+               UNION ALL
+               SELECT 'writing' AS kind, w.id, w.telegram_id, w.score, w.level, w.result_json, w.created_at,
+                      u.full_name, u.username, e.title, e.part
+               FROM writing_submissions w
+               LEFT JOIN users u ON u.telegram_id = w.telegram_id
+               LEFT JOIN exams e ON e.id = w.exam_id
+               WHERE w.status = 'done' {since.format(t='w')}
+           ) ORDER BY created_at DESC, id DESC"""
     )
 
 
@@ -819,16 +876,6 @@ async def rename_exam(exam_id: int, title: str):
     await _execute("UPDATE exams SET title = ? WHERE id = ?", (title, exam_id))
 
 
-async def duplicate_exam(exam_id: int) -> int | None:
-    exam = await get_exam(exam_id)
-    if not exam:
-        return None
-    new_id = await create_exam(f"{exam['title']} (nusxa)"[:100], exam.get("kind") or "speaking", exam.get("part"))
-    for q in await get_questions(exam_id):
-        await add_question(new_id, q["text"], q["photo_file_id"], q["prep_sec"], q["answer_sec"], q.get("meta"))
-    return new_id
-
-
 # ---------- Foydalanuvchilar ro'yxati (admin uchun) ----------
 
 async def count_users() -> int:
@@ -848,14 +895,6 @@ async def list_users(offset: int = 0, limit: int = 8):
 
 
 # ---------- Hamma testlarni o'chirish ----------
-
-async def delete_all_exams() -> int:
-    """Barcha imtihon/mavzularni va ularning savollarini o'chiradi (natijalar tarixi saqlanadi). Soni qaytadi."""
-    n = (await _fetchone("SELECT COUNT(*) AS c FROM exams"))["c"]
-    await _execute("DELETE FROM questions")
-    await _execute("DELETE FROM exams")
-    return n
-
 
 # ---------- Bot holati (FSM): ko'p bosqichli amallar qayta ishga tushganda ham davom etadi ----------
 

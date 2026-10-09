@@ -18,6 +18,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
+    BufferedInputFile,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -29,6 +30,7 @@ from aiogram.types import (
 
 import db
 import grader
+import report
 import writing
 from access import check_access
 from config import EXAM_LANGUAGE, WEBAPP_URL, is_admin
@@ -622,8 +624,6 @@ async def _exams_view():
         InlineKeyboardButton(text=f"➕ 🎙 {SPEAKING_NAME} testi", callback_data="nk:speaking"),
         InlineKeyboardButton(text=f"➕ ✍️ {WRITING_NAME} mavzusi", callback_data="nk:writing"),
     ])
-    if exams:
-        rows.append([InlineKeyboardButton(text="🗑 Hamma testlarni o'chirish", callback_data="exams_wipe_ask")])
     rows.append([InlineKeyboardButton(text="⬅️ Orqaga", callback_data="admin")])
     return _join_limited(lines), InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -699,16 +699,19 @@ async def _exam_view(exam_id: int):
         for i, q in enumerate(questions, 1):
             photo = " 🖼" if q["photo_file_id"] else ""
             lines.append(f"<b>{i}.</b>{photo} {e(_preview(q['text']))}\n    ⏳ {q['prep_sec']} s, 🎙 {q['answer_sec']} s")
-        rows.append([InlineKeyboardButton(text="➕ Savol qo'shish", callback_data=f"q_new:{exam_id}")])
-        for i, q in enumerate(questions, 1):
-            rows.append([InlineKeyboardButton(text=f"🗑 {i}-savolni o'chirish", callback_data=f"q_del:{q['id']}")])
+        if questions:
+            lines.append("\n✏️ Savolni o'zgartirish (matn, rasm, vaqt, tartib, o'chirish) uchun uning tugmasini bosing.")
+        edit = [InlineKeyboardButton(text=f"✏️ {i}-savol", callback_data=f"q_edit:{q['id']}")
+                for i, q in enumerate(questions, 1)]
+        rows += [edit[i:i + 3] for i in range(0, len(edit), 3)]
+        add = [InlineKeyboardButton(text="➕ Savol qo'shish", callback_data=f"q_new:{exam_id}")]
+        if len(questions) > 1:
+            add.append(InlineKeyboardButton(text="⏱ Hamma savollar vaqti", callback_data=f"qall:{exam_id}"))
+        rows.append(add)
 
     toggle = "⚪️ Yopish" if exam["is_active"] else "🟢 O'quvchilarga ochish"
     rows.append([InlineKeyboardButton(text=toggle, callback_data=f"exam_toggle:{exam_id}")])
-    rows.append([
-        InlineKeyboardButton(text="✏️ Nomini o'zgartirish", callback_data=f"exam_ren:{exam_id}"),
-        InlineKeyboardButton(text="📋 Nusxalash", callback_data=f"exam_dup:{exam_id}"),
-    ])
+    rows.append([InlineKeyboardButton(text="✏️ Nomini o'zgartirish", callback_data=f"exam_ren:{exam_id}")])
     rows.append([InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"exam_del_ask:{exam_id}")])
     rows.append([InlineKeyboardButton(text="⬅️ Testlar", callback_data="adm_exams")])
     return _join_limited(lines), InlineKeyboardMarkup(inline_keyboard=rows)
@@ -840,9 +843,7 @@ async def new_exam_title(message: Message, state: FSMContext):
             intro += "topshiriq matni."
         return await _start_task_flow(message, state, exam_id, data.get("part"), intro=intro)
 
-    text, kb = await _exam_view(exam_id)
-    await message.answer("✅ Test yaratildi (hozircha yopiq). 3/3: endi savollarni qo'shing.")
-    await message.answer(text, parse_mode="HTML", reply_markup=kb)
+    await _ask_question_text(message, state, exam_id, intro="✅ Test yaratildi (hozircha yopiq). 3/3: savollar.\n\n")
 
 
 # ---------- Yazma topshirig'i: qismlab kiritish (PDF tuzilishi bo'yicha) ----------
@@ -1057,40 +1058,6 @@ async def delete_exam(callback: CallbackQuery):
     await callback.answer("O'chirildi")
 
 
-@router.callback_query(F.data == "exams_wipe_ask")
-async def wipe_exams_ask(callback: CallbackQuery):
-    if not _admin_only(callback.from_user.id):
-        return await callback.answer()
-    exams = await db.list_exams()
-    if not exams:
-        return await callback.answer("O'chiriladigan test yo'q.", show_alert=True)
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="✅ Ha, hammasini o'chirish", callback_data="exams_wipe"),
-                InlineKeyboardButton(text="❌ Yo'q", callback_data="adm_exams"),
-            ]
-        ]
-    )
-    await callback.message.edit_text(
-        f"⚠️ <b>Hamma testlar o'chiriladi</b>: {len(exams)} ta imtihon/mavzu va ularning savollari.\n\n"
-        "Foydalanuvchilar, premium va oldingi natijalar saqlanib qoladi. Bu amalni qaytarib bo'lmaydi. Davom etasizmi?",
-        parse_mode="HTML",
-        reply_markup=kb,
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data == "exams_wipe")
-async def wipe_exams(callback: CallbackQuery):
-    if not _admin_only(callback.from_user.id):
-        return await callback.answer()
-    count = await db.delete_all_exams()
-    text, kb = await _exams_view()
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
-    await callback.answer(f"{count} ta test o'chirildi", show_alert=True)
-
-
 RESULTS_PER_PAGE = 10
 
 
@@ -1122,12 +1089,41 @@ async def show_results(callback: CallbackQuery):
         nav.append(InlineKeyboardButton(text="◀️", callback_data=f"results:{page - 1}"))
     if has_next:
         nav.append(InlineKeyboardButton(text="▶️", callback_data=f"results:{page + 1}"))
-    kb_rows = ([nav] if nav else []) + [[InlineKeyboardButton(text="⬅️ Orqaga", callback_data="admin")]]
+    pdf = [InlineKeyboardButton(text=f"📄 PDF: {label}", callback_data=f"rpdf:{days}") for days, label in PDF_PERIODS]
+    kb_rows = ([nav] if nav else []) + [pdf[:2], pdf[2:]] + [[InlineKeyboardButton(text="⬅️ Orqaga", callback_data="admin")]]
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
     await callback.answer()
 
 
-# ---------- Nomini o'zgartirish / nusxalash ----------
+PDF_PERIODS = [(7, "oxirgi 7 kun"), (30, "oxirgi 30 kun"), (0, "hammasi")]
+_pdf_busy: set[int] = set()
+
+
+@router.callback_query(F.data.startswith("rpdf:"))
+async def results_pdf(callback: CallbackQuery):
+    """Natijalar PDF hisoboti: o'quvchilar alifbo tartibida + har biri bo'yicha batafsil."""
+    if not _admin_only(callback.from_user.id):
+        return await callback.answer()
+    if callback.from_user.id in _pdf_busy:
+        return await callback.answer("PDF tayyorlanmoqda, biroz kuting…")
+    days = int(callback.data.split(":")[1] or 0)
+    period = dict(PDF_PERIODS).get(days, f"oxirgi {days} kun")
+    _pdf_busy.add(callback.from_user.id)
+    try:
+        await callback.answer("📄 PDF tayyorlanmoqda…")
+        rows = await db.results_report(days or None)
+        data = await asyncio.to_thread(report.build_pdf, rows, period)
+        stamp = time.strftime("%Y-%m-%d")
+        await callback.message.answer_document(
+            BufferedInputFile(data, filename=f"natijalar_{stamp}_{'hammasi' if not days else f'{days}kun'}.pdf"),
+            caption=f"📄 Natijalar hisoboti — {period}: {len(rows)} ta natija, "
+                    f"{len({r['telegram_id'] for r in rows})} ta o'quvchi.",
+        )
+    finally:
+        _pdf_busy.discard(callback.from_user.id)
+
+
+# ---------- Nomini o'zgartirish ----------
 
 class RenameExam(StatesGroup):
     title = State()
@@ -1160,36 +1156,67 @@ async def rename_exam_save(message: Message, state: FSMContext):
     await message.answer(text, parse_mode="HTML", reply_markup=kb)
 
 
-@router.callback_query(F.data.startswith("exam_dup:"))
-async def duplicate_exam(callback: CallbackQuery):
-    if not _admin_only(callback.from_user.id):
-        return await callback.answer()
-    new_id = await db.duplicate_exam(int(callback.data.split(":")[1]))
-    if not new_id:
-        return await callback.answer("Test topilmadi.", show_alert=True)
-    text, kb = await _exam_view(new_id)
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
-    await callback.answer("Nusxa yaratildi (yopiq holatda)")
-
-
 # ======================================================================
-# ADMIN: speaking savoli qo'shish
+# ADMIN: speaking savollari - qo'shish (ketma-ket) va tahrirlash
 # ======================================================================
 
 SKIP_PHOTO = InlineKeyboardMarkup(
     inline_keyboard=[[InlineKeyboardButton(text="Rasmsiz davom etish ➡️", callback_data="q_nophoto")]]
 )
+PREP_OPTIONS = [0, 5, 10, 15, 30, 60]
+ANSWER_OPTIONS = [30, 45, 60, 90, 120]
+PREP_RANGE, ANSWER_RANGE = (0, 300), (10, 600)
 
 
-def _seconds_kb(prefix: str, options: list[int], recommended: int) -> InlineKeyboardMarkup:
-    opts = sorted(set(options + [recommended]))
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text=f"{'⭐ ' if s == recommended else ''}{s} s", callback_data=f"{prefix}:{s}")
-                for s in opts
-            ]
-        ]
+class EditQuestion(StatesGroup):
+    text = State()
+    photo = State()
+    prep = State()
+    answer = State()
+
+
+def _seconds_kb(prefix: str, options: list[int], recommended: int | None,
+                extra: list[list[InlineKeyboardButton]] | None = None) -> InlineKeyboardMarkup:
+    opts = sorted(set(options + ([recommended] if recommended is not None else [])))
+    buttons = [InlineKeyboardButton(text=f"{'⭐ ' if s == recommended else ''}{s} s", callback_data=f"{prefix}:{s}")
+               for s in opts]
+    return InlineKeyboardMarkup(inline_keyboard=[buttons[i:i + 4] for i in range(0, len(buttons), 4)] + (extra or []))
+
+
+def _parse_seconds(text: str | None, bounds: tuple[int, int]) -> int | None:
+    digits = "".join(ch for ch in (text or "") if ch.isdigit())
+    if not digits or len(digits) > 4:
+        return None
+    value = int(digits)
+    return value if bounds[0] <= value <= bounds[1] else None
+
+
+def _asks_photo(part: str | None) -> bool:
+    """Part 1.1 - shaxsiy savollar, rasm bo'lmaydi: bu bosqich so'ralmaydi (kerak bo'lsa tahrirlashda qo'shiladi)."""
+    return part != "1.1"
+
+
+async def _ask_question_text(message: Message, state: FSMContext, exam_id: int, intro: str = ""):
+    exam = await db.get_exam(exam_id)
+    if not exam:
+        await state.clear()
+        return await message.answer("Test topilmadi (o'chirilgan bo'lishi mumkin).")
+    questions = await db.get_questions(exam_id)
+    position = len(questions) + 1
+    count = part_info("speaking", exam.get("part")).get("count")
+    data = await state.get_data()
+    last_times = data.get("last_times") if data.get("exam_id") == exam_id else None
+    await state.clear()
+    await state.set_state(NewQuestion.text)
+    await state.update_data(exam_id=exam_id, part=exam.get("part"), position=position, last_times=last_times)
+    of = f" (jami {count} ta)" if count else ""
+    kb = None
+    if questions:
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Tugatish", callback_data=f"q_done:{exam_id}")]])
+    await message.answer(
+        f"{intro}✏️ <b>{position}-savol</b>{of} matnini yozing ({LANG['name_uz']}da).\n"
+        f"Masalan: <i>{e(LANG['question_example'])}</i>\n\nBekor qilish: /cancel",
+        parse_mode="HTML", reply_markup=kb,
     )
 
 
@@ -1198,43 +1225,65 @@ async def new_question(callback: CallbackQuery, state: FSMContext):
     if not _admin_only(callback.from_user.id):
         return await callback.answer()
     exam_id = int(callback.data.split(":")[1])
-    exam = await db.get_exam(exam_id)
-    if not exam:
+    if not await db.get_exam(exam_id):
         return await callback.answer("Test topilmadi (o'chirilgan bo'lishi mumkin).", show_alert=True)
-    position = len(await db.get_questions(exam_id)) + 1  # qismdagi savol tartibi (vaqt tavsiyasi uchun)
+    await _ask_question_text(callback.message, state, exam_id)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("q_done:"))
+async def new_question_done(callback: CallbackQuery, state: FSMContext):
+    if not _admin_only(callback.from_user.id):
+        return await callback.answer()
     await state.clear()
-    await state.set_state(NewQuestion.text)
-    await state.update_data(exam_id=exam_id, part=exam.get("part"), position=position)
-    await callback.message.answer(
-        f"1/4. {position}-savol matnini yozing ({LANG['name_uz']}da).\n"
-        f"Masalan: <i>{e(LANG['question_example'])}</i>",
-        parse_mode="HTML",
-    )
+    await callback.message.edit_reply_markup(reply_markup=None)
+    text, kb = await _exam_view(int(callback.data.split(":")[1]))
+    await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
     await callback.answer()
 
 
 @router.message(NewQuestion.text)
 async def new_question_text(message: Message, state: FSMContext):
+    if not _admin_only(message.from_user.id):
+        return
     text = (message.text or "").strip()
     if not text or text.startswith("/"):
         return await message.answer("Savolni matn ko'rinishida yozing. Bekor qilish: /cancel")
     await state.update_data(text=text[:2500])
-    await state.set_state(NewQuestion.photo)
     data = await state.get_data()
-    hint = "2/4. Savolga rasm kerak bo'lsa (masalan, Part 1.2 uchun), rasmni yuboring."
+    if not _asks_photo(data.get("part")):
+        await state.update_data(photo=None)
+        return await _ask_times(message, state)
+    await state.set_state(NewQuestion.photo)
+    hint = "🖼 Savolga rasm kerak bo'lsa, rasmni yuboring."
     if part_info("speaking", data.get("part")).get("carry_photo") and data.get("position", 1) > 1:
         hint += " Yangi rasm shart emas — oldingi savoldagi rasm bu savolda ham ko'rinadi."
     await message.answer(hint, reply_markup=SKIP_PHOTO)
+
+
+async def _ask_times(message: Message, state: FSMContext):
+    """Vaqtlar: rasmiy (⭐), oldingi savoldagidek yoki boshqa (admin o'zi tanlaydi)."""
+    data = await state.get_data()
+    prep, answer = speaking_times(data.get("part"), data.get("position", 1))
+    rows = [[InlineKeyboardButton(text=f"⭐ Rasmiy: ⏳ {prep} s, 🎙 {answer} s", callback_data=f"q_t:{prep}:{answer}")]]
+    last = data.get("last_times")
+    if last and tuple(last) != (prep, answer):
+        rows.append([InlineKeyboardButton(text=f"↩️ Oldingidek: ⏳ {last[0]} s, 🎙 {last[1]} s",
+                                          callback_data=f"q_t:{last[0]}:{last[1]}")])
+    rows.append([InlineKeyboardButton(text="⏱ Boshqa vaqt", callback_data="q_other")])
+    await state.set_state(NewQuestion.prep)
+    await state.update_data(times_menu=True)
+    await message.answer("⏱ Vaqtni tanlang (⏳ tayyorlanish, 🎙 javob berish):",
+                         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
 async def _ask_prep(message: Message, state: FSMContext):
     data = await state.get_data()
     prep, _ = speaking_times(data.get("part"), data.get("position", 1))
     await state.set_state(NewQuestion.prep)
-    await message.answer(
-        "3/4. Tayyorlanish vaqti (⭐ — rasmiy formatdagi vaqt):",
-        reply_markup=_seconds_kb("q_prep", [0, 15, 30, 60], prep),
-    )
+    await state.update_data(times_menu=False)
+    await message.answer("⏳ Tayyorlanish vaqti (⭐ — rasmiy). Boshqa son kerak bo'lsa, yozib yuboring (0–300):",
+                         reply_markup=_seconds_kb("q_prep", PREP_OPTIONS, prep))
 
 
 @router.message(NewQuestion.photo, F.photo)
@@ -1243,7 +1292,7 @@ async def new_question_photo(message: Message, state: FSMContext):
     if message.media_group_id:
         await message.answer("ℹ️ Bir nechta rasm (albom) yuborildi — savolga faqat birinchisi biriktirildi. "
                              "Ikki rasmni ko'rsatish uchun ularni bitta rasmga birlashtirib yuboring.")
-    await _ask_prep(message, state)
+    await _ask_times(message, state)
 
 
 @router.message(NewQuestion.prep, F.photo)
@@ -1258,7 +1307,8 @@ async def new_question_album_rest(message: Message, state: FSMContext):
 @router.callback_query(NewQuestion.photo, F.data == "q_nophoto")
 async def new_question_nophoto(callback: CallbackQuery, state: FSMContext):
     await state.update_data(photo=None)
-    await _ask_prep(callback.message, state)
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await _ask_times(callback.message, state)
     await callback.answer()
 
 
@@ -1267,27 +1317,343 @@ async def new_question_photo_wrong(message: Message):
     await message.answer("Rasm yuboring yoki «Rasmsiz davom etish» tugmasini bosing.", reply_markup=SKIP_PHOTO)
 
 
-@router.callback_query(NewQuestion.prep, F.data.startswith("q_prep:"))
-async def new_question_prep(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(NewQuestion.prep, F.data == "q_other")
+async def new_question_other(callback: CallbackQuery, state: FSMContext):
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await _ask_prep(callback.message, state)
+    await callback.answer()
+
+
+@router.callback_query(NewQuestion.prep, F.data.startswith("q_t:"))
+async def new_question_times(callback: CallbackQuery, state: FSMContext):
+    _, prep, answer = callback.data.split(":")
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await state.update_data(prep=int(prep))
+    await _save_new_question(callback.message, state, int(answer))
+    await callback.answer()
+
+
+async def _set_prep(message: Message, state: FSMContext, prep: int):
     data = await state.get_data()
     _, answer = speaking_times(data.get("part"), data.get("position", 1))
-    await state.update_data(prep=int(callback.data.split(":")[1]))
+    await state.update_data(prep=prep)
     await state.set_state(NewQuestion.answer)
-    await callback.message.edit_text(
-        "4/4. Javob berish vaqti (⭐ — rasmiy formatdagi vaqt):",
-        reply_markup=_seconds_kb("q_ans", [30, 60, 90, 120], answer),
-    )
+    await message.answer(f"⏳ Tayyorlanish: {prep} s.\n🎙 Javob berish vaqti (⭐ — rasmiy). Boshqa son kerak bo'lsa, "
+                         f"yozib yuboring (10–600):", reply_markup=_seconds_kb("q_ans", ANSWER_OPTIONS, answer))
+
+
+@router.callback_query(NewQuestion.prep, F.data.startswith("q_prep:"))
+async def new_question_prep(callback: CallbackQuery, state: FSMContext):
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await _set_prep(callback.message, state, int(callback.data.split(":")[1]))
     await callback.answer()
+
+
+@router.message(NewQuestion.prep)
+async def new_question_prep_typed(message: Message, state: FSMContext):
+    data = await state.get_data()
+    value = None if data.get("times_menu") else _parse_seconds(message.text, PREP_RANGE)
+    if value is None:
+        return await message.answer("Yuqoridagi tugmalardan tanlang" + ("" if data.get("times_menu") else
+                                    " yoki 0 dan 300 gacha son yozing") + ". Bekor qilish: /cancel")
+    await _set_prep(message, state, value)
 
 
 @router.callback_query(NewQuestion.answer, F.data.startswith("q_ans:"))
 async def new_question_answer(callback: CallbackQuery, state: FSMContext):
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await _save_new_question(callback.message, state, int(callback.data.split(":")[1]))
+    await callback.answer()
+
+
+@router.message(NewQuestion.answer)
+async def new_question_answer_typed(message: Message, state: FSMContext):
+    value = _parse_seconds(message.text, ANSWER_RANGE)
+    if value is None:
+        return await message.answer("Tugmalardan tanlang yoki 10 dan 600 gacha son yozing. Bekor qilish: /cancel")
+    await _save_new_question(message, state, value)
+
+
+async def _save_new_question(message: Message, state: FSMContext, answer: int):
     data = await state.get_data()
-    await db.add_question(data["exam_id"], data["text"], data.get("photo"), data["prep"], int(callback.data.split(":")[1]))
+    if "text" not in data or "prep" not in data:
+        await state.clear()
+        return await message.answer("Bu amal eskirgan. Testni ochib, «➕ Savol qo'shish» ni qaytadan bosing.")
+    exam_id = data["exam_id"]
+    if not await db.get_exam(exam_id):
+        await state.clear()
+        return await message.answer("Test topilmadi (o'chirilgan bo'lishi mumkin).")
+    await db.add_question(exam_id, data["text"], data.get("photo"), data["prep"], answer)
+    await state.update_data(last_times=[data["prep"], answer])
+    n = len(await db.get_questions(exam_id))
+    count = part_info("speaking", data.get("part")).get("count")
+    saved = f"✅ {n}-savol saqlandi (⏳ {data['prep']} s, 🎙 {answer} s).\n\n"
+    if count and n < count:  # rasmiy formatdagi savollar soni to'lguncha keyingisi darhol so'raladi
+        return await _ask_question_text(message, state, exam_id, intro=saved)
     await state.clear()
-    await callback.message.edit_text("✅ Savol qo'shildi.")
-    text, kb = await _exam_view(data["exam_id"])
-    await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
+    done = f"🎉 Barcha {count} ta savol tayyor. Endi testni «🟢 O'quvchilarga ochish» mumkin." if count and n == count else ""
+    await message.answer(saved + done if done else saved.strip())
+    text, kb = await _exam_view(exam_id)
+    await message.answer(text, parse_mode="HTML", reply_markup=kb)
+
+
+# ---------- Bitta savolni tahrirlash ----------
+
+async def _question_view(question_id: int):
+    q = await db.get_question(question_id)
+    if not q:
+        return None, None
+    questions = await db.get_questions(q["exam_id"])
+    pos = next((i for i, x in enumerate(questions, 1) if x["id"] == question_id), 1)
+    lines = [
+        f"✏️ <b>{pos}-savol</b> (jami {len(questions)} ta)\n",
+        e(q["text"]),
+        f"\n🖼 Rasm: {'bor' if q['photo_file_id'] else 'yo‘q'}",
+        f"⏳ Tayyorlanish: <b>{q['prep_sec']} s</b>",
+        f"🎙 Javob berish: <b>{q['answer_sec']} s</b>",
+    ]
+    qid = question_id
+    rows = [
+        [InlineKeyboardButton(text="✏️ Matnni o'zgartirish", callback_data=f"qe_t:{qid}")],
+        [InlineKeyboardButton(text="⏳ Tayyorlanish vaqti", callback_data=f"qe_prep:{qid}"),
+         InlineKeyboardButton(text="🎙 Javob vaqti", callback_data=f"qe_ans:{qid}")],
+    ]
+    photo = [InlineKeyboardButton(text="🖼 Rasmni almashtirish" if q["photo_file_id"] else "🖼 Rasm qo'shish",
+                                  callback_data=f"qe_p:{qid}")]
+    if q["photo_file_id"]:
+        photo.append(InlineKeyboardButton(text="🗑 Rasmni olib tashlash", callback_data=f"qe_px:{qid}"))
+    rows.append(photo)
+    move = []
+    if pos > 1:
+        move.append(InlineKeyboardButton(text="⬆️ Yuqoriga", callback_data=f"qe_up:{qid}"))
+    if pos < len(questions):
+        move.append(InlineKeyboardButton(text="⬇️ Pastga", callback_data=f"qe_dn:{qid}"))
+    if move:
+        rows.append(move)
+    rows.append([InlineKeyboardButton(text="🗑 Savolni o'chirish", callback_data=f"q_delask:{qid}")])
+    rows.append([InlineKeyboardButton(text="⬅️ Testga qaytish", callback_data=f"exam:{q['exam_id']}")])
+    return _join_limited(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _show_question(callback: CallbackQuery, question_id: int, note: str | None = None):
+    text, kb = await _question_view(question_id)
+    if not text:
+        return await callback.answer("Savol topilmadi (o'chirilgan bo'lishi mumkin).", show_alert=True)
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer(note)
+
+
+async def _send_question(message: Message, question_id: int, note: str):
+    text, kb = await _question_view(question_id)
+    await message.answer(note)
+    if text:
+        await message.answer(text, parse_mode="HTML", reply_markup=kb)
+
+
+def _qid(callback: CallbackQuery) -> int:
+    return int(callback.data.split(":")[1])
+
+
+@router.callback_query(F.data.startswith("q_edit:"))
+async def edit_question(callback: CallbackQuery, state: FSMContext):
+    if not _admin_only(callback.from_user.id):
+        return await callback.answer()
+    await state.clear()
+    await _show_question(callback, _qid(callback))
+
+
+@router.callback_query(F.data.startswith("qe_up:") | F.data.startswith("qe_dn:"))
+async def move_question(callback: CallbackQuery):
+    if not _admin_only(callback.from_user.id):
+        return await callback.answer()
+    moved = await db.move_question(_qid(callback), -1 if callback.data.startswith("qe_up:") else 1)
+    await _show_question(callback, _qid(callback), None if moved else "Bu savolni surib bo'lmaydi")
+
+
+@router.callback_query(F.data.startswith("qe_t:"))
+async def edit_question_text_ask(callback: CallbackQuery, state: FSMContext):
+    if not _admin_only(callback.from_user.id):
+        return await callback.answer()
+    q = await db.get_question(_qid(callback))
+    if not q:
+        return await callback.answer("Savol topilmadi.", show_alert=True)
+    await state.clear()
+    await state.set_state(EditQuestion.text)
+    await state.update_data(qid=q["id"])
+    await callback.message.answer(f"Hozirgi matn:\n<code>{e(q['text'])}</code>\n\nYangi matnni yozing. Bekor qilish: /cancel",
+                                  parse_mode="HTML")
+    await callback.answer()
+
+
+@router.message(EditQuestion.text)
+async def edit_question_text_save(message: Message, state: FSMContext):
+    if not _admin_only(message.from_user.id):
+        return
+    text = (message.text or "").strip()
+    if not text or text.startswith("/"):
+        return await message.answer("Savolni matn ko'rinishida yozing. Bekor qilish: /cancel")
+    qid = (await state.get_data()).get("qid")
+    await state.clear()
+    if not qid or not await db.get_question(qid):
+        return await message.answer("Savol topilmadi (o'chirilgan bo'lishi mumkin).")
+    await db.update_question(qid, text=text[:2500])
+    await _send_question(message, qid, "✅ Matn saqlandi.")
+
+
+@router.callback_query(F.data.startswith("qe_p:"))
+async def edit_question_photo_ask(callback: CallbackQuery, state: FSMContext):
+    if not _admin_only(callback.from_user.id):
+        return await callback.answer()
+    await state.clear()
+    await state.set_state(EditQuestion.photo)
+    await state.update_data(qid=_qid(callback))
+    await callback.message.answer("Yangi rasmni yuboring. Bekor qilish: /cancel")
+    await callback.answer()
+
+
+@router.message(EditQuestion.photo, F.photo)
+async def edit_question_photo_save(message: Message, state: FSMContext):
+    qid = (await state.get_data()).get("qid")
+    await state.clear()
+    if not qid or not await db.get_question(qid):
+        return await message.answer("Savol topilmadi (o'chirilgan bo'lishi mumkin).")
+    await db.update_question(qid, photo_file_id=message.photo[-1].file_id)
+    await _send_question(message, qid, "✅ Rasm saqlandi.")
+
+
+@router.message(EditQuestion.photo)
+async def edit_question_photo_wrong(message: Message):
+    await message.answer("Rasm yuboring. Bekor qilish: /cancel")
+
+
+@router.callback_query(F.data.startswith("qe_px:"))
+async def edit_question_photo_remove(callback: CallbackQuery):
+    if not _admin_only(callback.from_user.id):
+        return await callback.answer()
+    if await db.get_question(_qid(callback)):
+        await db.update_question(_qid(callback), photo_file_id=None)
+    await _show_question(callback, _qid(callback), "Rasm olib tashlandi")
+
+
+@router.callback_query(F.data.startswith("qe_prep:") | F.data.startswith("qe_ans:"))
+async def edit_question_time_ask(callback: CallbackQuery, state: FSMContext):
+    if not _admin_only(callback.from_user.id):
+        return await callback.answer()
+    q = await db.get_question(_qid(callback))
+    if not q:
+        return await callback.answer("Savol topilmadi.", show_alert=True)
+    exam = await db.get_exam(q["exam_id"])
+    pos = next((i for i, x in enumerate(await db.get_questions(q["exam_id"]), 1) if x["id"] == q["id"]), 1)
+    prep, answer = speaking_times(exam.get("part") if exam else None, pos)
+    is_prep = callback.data.startswith("qe_prep:")
+    await state.clear()
+    await state.set_state(EditQuestion.prep if is_prep else EditQuestion.answer)
+    await state.update_data(qid=q["id"])
+    back = [[InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"q_edit:{q['id']}")]]
+    kb = (_seconds_kb(f"qs_p:{q['id']}", PREP_OPTIONS, prep, back) if is_prep
+          else _seconds_kb(f"qs_a:{q['id']}", ANSWER_OPTIONS, answer, back))
+    label = (f"⏳ Tayyorlanish vaqti (hozir {q['prep_sec']} s)" if is_prep
+             else f"🎙 Javob berish vaqti (hozir {q['answer_sec']} s)")
+    bounds = "0–300" if is_prep else "10–600"
+    await callback.message.edit_text(f"{label}.\n⭐ — rasmiy. Boshqa son kerak bo'lsa, yozib yuboring ({bounds}):",
+                                     reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("qs_p:") | F.data.startswith("qs_a:"))
+async def edit_question_time_save(callback: CallbackQuery, state: FSMContext):
+    if not _admin_only(callback.from_user.id):
+        return await callback.answer()
+    _, qid, value = callback.data.split(":")
+    await state.clear()
+    if not await db.get_question(int(qid)):
+        return await callback.answer("Savol topilmadi.", show_alert=True)
+    field = "prep_sec" if callback.data.startswith("qs_p:") else "answer_sec"
+    await db.update_question(int(qid), **{field: int(value)})
+    await _show_question(callback, int(qid), "Saqlandi")
+
+
+@router.message(EditQuestion.prep)
+@router.message(EditQuestion.answer)
+async def edit_question_time_typed(message: Message, state: FSMContext):
+    is_prep = await state.get_state() == EditQuestion.prep.state
+    value = _parse_seconds(message.text, PREP_RANGE if is_prep else ANSWER_RANGE)
+    if value is None:
+        return await message.answer("Tugmalardan tanlang yoki " + ("0 dan 300" if is_prep else "10 dan 600")
+                                    + " gacha son yozing. Bekor qilish: /cancel")
+    qid = (await state.get_data()).get("qid")
+    await state.clear()
+    if not qid or not await db.get_question(qid):
+        return await message.answer("Savol topilmadi (o'chirilgan bo'lishi mumkin).")
+    await db.update_question(qid, **{"prep_sec" if is_prep else "answer_sec": value})
+    await _send_question(message, qid, "✅ Vaqt saqlandi.")
+
+
+# ---------- Hamma savollar uchun bir xil vaqt ----------
+
+@router.callback_query(F.data.startswith("qall:"))
+async def all_times_prep(callback: CallbackQuery):
+    if not _admin_only(callback.from_user.id):
+        return await callback.answer()
+    exam_id = _qid(callback)
+    exam = await db.get_exam(exam_id)
+    if not exam:
+        return await callback.answer("Test topilmadi.", show_alert=True)
+    prep, _ = speaking_times(exam.get("part"), 1)
+    extra = [[InlineKeyboardButton(text="O'zgartirmaslik ➡️", callback_data=f"qap:{exam_id}:-")],
+             [InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"exam:{exam_id}")]]
+    await callback.message.edit_text("⏱ Hamma savollar uchun bir xil vaqt.\n\n1/2. ⏳ Tayyorlanish vaqti (⭐ — rasmiy):",
+                                     reply_markup=_seconds_kb(f"qap:{exam_id}", PREP_OPTIONS, prep, extra))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("qap:"))
+async def all_times_answer(callback: CallbackQuery):
+    if not _admin_only(callback.from_user.id):
+        return await callback.answer()
+    _, exam_id, prep = callback.data.split(":")
+    exam = await db.get_exam(int(exam_id))
+    if not exam:
+        return await callback.answer("Test topilmadi.", show_alert=True)
+    _, answer = speaking_times(exam.get("part"), 2)
+    extra = [[InlineKeyboardButton(text="O'zgartirmaslik", callback_data=f"qaa:{exam_id}:{prep}:-")],
+             [InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"exam:{exam_id}")]]
+    chosen = "o'zgarmaydi" if prep == "-" else f"{prep} s"
+    await callback.message.edit_text(f"⏱ Hamma savollar uchun bir xil vaqt.\n⏳ Tayyorlanish: {chosen}\n\n"
+                                     "2/2. 🎙 Javob berish vaqti (⭐ — rasmiy):",
+                                     reply_markup=_seconds_kb(f"qaa:{exam_id}:{prep}", ANSWER_OPTIONS, answer, extra))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("qaa:"))
+async def all_times_save(callback: CallbackQuery):
+    if not _admin_only(callback.from_user.id):
+        return await callback.answer()
+    _, exam_id, prep, answer = callback.data.split(":")
+    exam_id = int(exam_id)
+    if not await db.get_exam(exam_id):
+        return await callback.answer("Test topilmadi.", show_alert=True)
+    await db.set_exam_times(exam_id, None if prep == "-" else int(prep), None if answer == "-" else int(answer))
+    text, kb = await _exam_view(exam_id)
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer("Vaqtlar saqlandi")
+
+
+# ---------- Savolni o'chirish ----------
+
+@router.callback_query(F.data.startswith("q_delask:"))
+async def delete_question_ask(callback: CallbackQuery):
+    if not _admin_only(callback.from_user.id):
+        return await callback.answer()
+    q = await db.get_question(_qid(callback))
+    if not q:
+        return await callback.answer("Savol topilmadi.", show_alert=True)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Ha, o'chirish", callback_data=f"q_del:{q['id']}"),
+        InlineKeyboardButton(text="❌ Yo'q", callback_data=f"q_edit:{q['id']}"),
+    ]])
+    await callback.message.edit_text(f"Bu savol o'chirilsinmi?\n\n<i>{e(_preview(q['text'], 200))}</i>",
+                                     parse_mode="HTML", reply_markup=kb)
     await callback.answer()
 
 
