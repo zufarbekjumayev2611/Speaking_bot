@@ -111,6 +111,32 @@ class UserTouchMiddleware(BaseMiddleware):
         return await handler(event, data)
 
 
+# Pastki menyu (reply-klaviatura) Telegram'da o'zi yangilanmaydi - faqat bot yangisini yuborganda.
+# Menyuga tugma qo'shilganda shu son oshiriladi: har bir foydalanuvchiga yangi menyu BIR MARTA yuboriladi.
+MENU_VERSION = 2
+MENU_NEWS = "🔄 Menyu yangilandi: «📊 Natijalarim» — o'z natijalaringizni shu yerda ko'rasiz."
+
+
+class MenuRefreshMiddleware(BaseMiddleware):
+    def __init__(self):
+        self._fresh: set[int] = set()
+
+    async def __call__(self, handler, event: Message, data):
+        user = event.from_user
+        if not user or user.is_bot or event.chat.type != "private" or user.id in self._fresh:
+            return await handler(event, data)
+        try:
+            if await db.get_menu_version(user.id) < MENU_VERSION:
+                if not (event.text or "").startswith("/start"):  # /start yangi menyuni o'zi yuboradi
+                    from bot import main_keyboard
+                    await event.answer(MENU_NEWS, reply_markup=main_keyboard(user.id))
+                await db.set_menu_version(user.id, MENU_VERSION)
+            self._fresh.add(user.id)
+        except Exception:
+            log.warning("Menyuni yangilab bo'lmadi (%s)", user.id, exc_info=True)
+        return await handler(event, data)
+
+
 # ---------------------------------------------------------------- xatolar
 
 async def on_error(event: ErrorEvent):
@@ -358,6 +384,7 @@ async def drain_background(timeout: float = 25):
 def setup(dp: Dispatcher, bot):
     """main.py dan: barcha routerlardan KEYIN chaqiriladi (fallback oxirida turishi kerak)."""
     dp.update.outer_middleware(UserTouchMiddleware())
+    dp.message.outer_middleware(MenuRefreshMiddleware())
     dp.errors.register(on_error)
     dp.include_router(fallback)
     logging.getLogger("aiogram.dispatcher").addHandler(ConflictWatcher(bot))

@@ -118,6 +118,7 @@ _MIGRATIONS = [
     "ALTER TABLE premium_log ADD COLUMN plan TEXT",
     "ALTER TABLE users ADD COLUMN blocked INTEGER DEFAULT 0",
     "ALTER TABLE questions ADD COLUMN meta TEXT",  # writing topshirig'ining maydonlari (JSON)
+    "ALTER TABLE users ADD COLUMN menu_ver INTEGER DEFAULT 0",  # foydalanuvchidagi pastki menyu versiyasi
 ]
 
 
@@ -334,6 +335,15 @@ async def ping() -> float:
     t = time.perf_counter()
     await _fetchone("SELECT 1 AS x")
     return time.perf_counter() - t
+
+
+async def get_menu_version(telegram_id: int) -> int:
+    row = await _fetchone("SELECT menu_ver FROM users WHERE telegram_id = ?", (telegram_id,))
+    return int((row or {}).get("menu_ver") or 0)
+
+
+async def set_menu_version(telegram_id: int, version: int):
+    await _execute("UPDATE users SET menu_ver = ? WHERE telegram_id = ?", (version, telegram_id))
 
 
 async def get_user(telegram_id: int):
