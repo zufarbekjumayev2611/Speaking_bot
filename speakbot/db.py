@@ -228,6 +228,10 @@ async def close_db():
         _db = None
 
 
+# «Yopish / ochish» tugmasi olib tashlandi - avval yopiq qolgan testlar ham o'quvchilarga ko'rinsin
+_ALL_OPEN = "UPDATE exams SET is_active = 1 WHERE is_active IS NULL OR is_active != 1"
+
+
 async def init_db():
     if _turso:
         statements = [s.strip() for s in SCHEMA.split(";") if s.strip()]
@@ -238,7 +242,7 @@ async def init_db():
             except TursoError:
                 pass  # ustun allaqachon bor
         await _turso.batch(
-            [("UPDATE exams SET part = '1' WHERE kind = 'writing' AND part IN ('1.1', '1.2')", ())]
+            [("UPDATE exams SET part = '1' WHERE kind = 'writing' AND part IN ('1.1', '1.2')", ()), (_ALL_OPEN, ())]
             + [(sql, ()) for sql in _INDEXES]
             + [(sql, ()) for sql in _view_statements()]
         )
@@ -253,6 +257,7 @@ async def init_db():
             pass
     # Yangi format: writing'da 1.1 va 1.2 alohida emas - ikkalasi "1-qism"
     await db.execute("UPDATE exams SET part = '1' WHERE kind = 'writing' AND part IN ('1.1', '1.2')")
+    await db.execute(_ALL_OPEN)
     for sql in _INDEXES:
         await db.execute(sql)
     for sql in _view_statements():
@@ -338,7 +343,8 @@ async def get_user(telegram_id: int):
 # ---------- Imtihonlar (speaking to'plamlari va writing mavzulari) ----------
 
 async def create_exam(title: str, kind: str = "speaking", part: str | None = None) -> int:
-    return await _execute("INSERT INTO exams (title, kind, part) VALUES (?, ?, ?)", (title, kind, part))
+    # Testlar doim ochiq: o'quvchilar savoli (yazmada - to'liq topshirig'i) bor har qanday testni ko'radi.
+    return await _execute("INSERT INTO exams (title, kind, part, is_active) VALUES (?, ?, ?, 1)", (title, kind, part))
 
 
 async def get_exam(exam_id: int):
@@ -347,7 +353,9 @@ async def get_exam(exam_id: int):
 
 async def list_exams():
     return await _fetchall(
-        """SELECT e.*, (SELECT COUNT(*) FROM questions q WHERE q.exam_id = e.id) AS q_count
+        """SELECT e.*, (SELECT COUNT(*) FROM questions q WHERE q.exam_id = e.id) AS q_count,
+                  (SELECT q.text FROM questions q WHERE q.exam_id = e.id ORDER BY q.position, q.id LIMIT 1) AS task_text,
+                  (SELECT q.meta FROM questions q WHERE q.exam_id = e.id ORDER BY q.position, q.id LIMIT 1) AS task_meta
            FROM exams e ORDER BY COALESCE(e.kind, 'speaking'), e.part, e.id DESC"""
     )
 
