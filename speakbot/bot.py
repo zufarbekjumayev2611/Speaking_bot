@@ -567,15 +567,29 @@ def _admin_only(user_id: int) -> bool:
     return is_admin(user_id)
 
 
+def _exam_ready(ex: dict) -> bool:
+    """O'quvchilarga ko'rinadimi: konuşmada kamida bitta savol, yazmada topshiriq to'liq."""
+    if (ex.get("kind") or "speaking") == "writing":
+        values = writing.task_values(ex.get("part"), {"text": ex.get("task_text"), "meta": ex.get("task_meta")})
+        return bool(ex.get("task_text") is not None) and not writing.missing_fields(ex.get("part"), values)
+    return bool(ex.get("q_count"))
+
+
+async def _with_task(exam: dict) -> dict:
+    qs = await db.get_questions(exam["id"])
+    first = qs[0] if qs else {}
+    return {**exam, "q_count": len(qs), "task_text": first.get("text"), "task_meta": first.get("meta")}
+
+
 async def _admin_panel_view():
     """Admin bosh sahifasi: qisqa ko'rsatkichlar va bo'limlar."""
     exams = await db.list_exams()
-    open_count = sum(1 for ex in exams if ex["is_active"])
+    ready = sum(1 for ex in exams if _exam_ready(ex))
     users = await db.count_users()
     premium = await db.count_active_premium()
     text = (
         "⚙️ <b>Admin panel</b>\n\n"
-        f"📚 Testlar: <b>{len(exams)}</b> (ochiq: {open_count})\n"
+        f"📚 Testlar: <b>{len(exams)}</b> (o'quvchilarga ko'rinadi: {ready})\n"
         f"👥 Foydalanuvchilar: <b>{users}</b> • 💎 Obunachilar: <b>{premium}</b>"
     )
     B = InlineKeyboardButton
@@ -612,14 +626,14 @@ async def _exams_view():
             continue
         lines.append(f"\n{KIND_ICON[kind]} <b>{KIND_NAME[kind]}</b>")
         for ex in group:
-            status = "🟢" if ex["is_active"] else "⚪️"
+            status = "✅" if _exam_ready(ex) else "❗"
             part = part_info(kind, ex.get("part"))["name"]
             lines.append(f"{status} <b>{e(ex['title'])}</b> — {e(part)}")
             rows.append(
                 [InlineKeyboardButton(text=f"{status} {KIND_ICON[kind]} {ex['title']}"[:60], callback_data=f"exam:{ex['id']}")]
             )
     if exams:
-        lines.append("\n🟢 — o'quvchilarga ochiq, ⚪️ — yopiq")
+        lines.append("\n✅ — o'quvchilarga ko'rinadi, ❗ — hali to'ldirilmagan (savol / topshiriq yo'q)")
     rows.append([
         InlineKeyboardButton(text=f"➕ 🎙 {SPEAKING_NAME} testi", callback_data="nk:speaking"),
         InlineKeyboardButton(text=f"➕ ✍️ {WRITING_NAME} mavzusi", callback_data="nk:writing"),
@@ -650,10 +664,8 @@ async def _writing_task_view(exam: dict) -> tuple[list[str], list[list[InlineKey
             lines.append(f"\n{i}. ❗ <b>{e(spec['short'])}</b> — kiritilmagan")
     has_photo = bool(row and row.get("photo_file_id"))
     lines.append("\n🖼 Rasm: " + ("bor" if has_photo else "yo'q (ixtiyoriy)"))
-    if missing and exam["is_active"]:
-        lines.append("\n⚠️ Mavzu ochiq, lekin topshiriq to'liq emas — o'quvchilar uni ko'rmaydi. Yetishmayotgan qismlarni kiriting.")
-    elif missing:
-        lines.append("\n❗ Topshiriq to'liq emas — yetishmayotgan qismlarni kiriting, shundan keyin o'quvchilarga ochish mumkin.")
+    if missing:
+        lines.append("\n❗ Topshiriq to'liq emas — yetishmayotgan qismlarni kiriting, shundan keyin o'quvchilar uni ko'radi.")
     else:
         lines.append("\n💡 «👁 O'quvchi ko'rinishi» tugmasi bilan o'quvchi ko'radigan topshiriqni tekshiring.")
 
@@ -680,7 +692,8 @@ async def _exam_view(exam_id: int):
         )
     kind = exam.get("kind") or "speaking"
     info = part_info(kind, exam.get("part"))
-    status = "🟢 Ochiq (o'quvchilarga ko'rinadi)" if exam["is_active"] else "⚪️ Yopiq"
+    status = ("✅ O'quvchilarga ko'rinadi" if _exam_ready(await _with_task(exam))
+              else "❗ Hali o'quvchilarga ko'rinmaydi — " + ("topshiriqni to'ldiring" if kind == "writing" else "savol qo'shing"))
     lines = [f"{KIND_ICON[kind]} <b>{e(exam['title'])}</b>\n{KIND_NAME[kind]} • {e(info['name'])}\n{status}\n"]
     rows = []
 
@@ -709,8 +722,6 @@ async def _exam_view(exam_id: int):
             add.append(InlineKeyboardButton(text="⏱ Hamma savollar vaqti", callback_data=f"qall:{exam_id}"))
         rows.append(add)
 
-    toggle = "⚪️ Yopish" if exam["is_active"] else "🟢 O'quvchilarga ochish"
-    rows.append([InlineKeyboardButton(text=toggle, callback_data=f"exam_toggle:{exam_id}")])
     rows.append([InlineKeyboardButton(text="✏️ Nomini o'zgartirish", callback_data=f"exam_ren:{exam_id}")])
     rows.append([InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"exam_del_ask:{exam_id}")])
     rows.append([InlineKeyboardButton(text="⬅️ Testlar", callback_data="adm_exams")])
@@ -835,7 +846,7 @@ async def new_exam_title(message: Message, state: FSMContext):
 
     if kind == "writing":
         n = len(writing.fields_for(data.get("part")))
-        intro = "✅ Mavzu yaratildi (hozircha yopiq).\n\n3/3: "
+        intro = "✅ Mavzu yaratildi — topshiriq to'liq kiritilgach, o'quvchilar uni ko'radi.\n\n3/3: "
         if n > 1:
             intro += (f"topshiriq <b>{n} ta qism</b>dan iborat — har birini alohida xabar qilib yuborasiz, har biri "
                       "yuborilishi bilan saqlanadi. Keyin istalgan qismni alohida tahrirlash mumkin.")
@@ -843,7 +854,7 @@ async def new_exam_title(message: Message, state: FSMContext):
             intro += "topshiriq matni."
         return await _start_task_flow(message, state, exam_id, data.get("part"), intro=intro)
 
-    await _ask_question_text(message, state, exam_id, intro="✅ Test yaratildi (hozircha yopiq). 3/3: savollar.\n\n")
+    await _ask_question_text(message, state, exam_id, intro="✅ Test yaratildi — savol qo'shilishi bilan o'quvchilar uni ko'radi.\n\n3/3: savollar.\n\n")
 
 
 # ---------- Yazma topshirig'i: qismlab kiritish (PDF tuzilishi bo'yicha) ----------
@@ -1006,30 +1017,7 @@ async def writing_preview(callback: CallbackQuery):
     await callback.answer()
 
 
-# ---------- Ochish / yopish / o'chirish / natijalar ----------
-
-@router.callback_query(F.data.startswith("exam_toggle:"))
-async def toggle_exam(callback: CallbackQuery):
-    if not _admin_only(callback.from_user.id):
-        return await callback.answer()
-    exam_id = int(callback.data.split(":")[1])
-    exam = await db.get_exam(exam_id)
-    if not exam:
-        return await callback.answer("Test topilmadi.", show_alert=True)
-    if not exam["is_active"]:
-        if exam.get("kind") == "writing":
-            values = writing.task_values(exam.get("part"), await db.get_writing_task(exam_id))
-            missing = writing.missing_fields(exam.get("part"), values)
-            if missing:
-                names = ", ".join(writing.FIELDS[f]["short"] for f in missing)
-                return await callback.answer(f"Avval topshiriqni to'ldiring: {names}.", show_alert=True)
-        elif not await db.get_questions(exam_id):
-            return await callback.answer("Avval kamida bitta savol qo'shing.", show_alert=True)
-    await db.set_exam_active(exam_id, not exam["is_active"])
-    text, kb = await _exam_view(exam_id)
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
-    await callback.answer("Saqlandi")
-
+# ---------- O'chirish / natijalar ----------
 
 @router.callback_query(F.data.startswith("exam_del_ask:"))
 async def delete_exam_ask(callback: CallbackQuery):
@@ -1391,7 +1379,7 @@ async def _save_new_question(message: Message, state: FSMContext, answer: int):
     if count and n < count:  # rasmiy formatdagi savollar soni to'lguncha keyingisi darhol so'raladi
         return await _ask_question_text(message, state, exam_id, intro=saved)
     await state.clear()
-    done = f"🎉 Barcha {count} ta savol tayyor. Endi testni «🟢 O'quvchilarga ochish» mumkin." if count and n == count else ""
+    done = f"🎉 Barcha {count} ta savol tayyor — o'quvchilar testni ko'ra oladi." if count and n == count else ""
     await message.answer(saved + done if done else saved.strip())
     text, kb = await _exam_view(exam_id)
     await message.answer(text, parse_mode="HTML", reply_markup=kb)
@@ -1665,10 +1653,6 @@ async def delete_question(callback: CallbackQuery):
     if not q:
         return await callback.answer("Savol topilmadi.")
     await db.delete_question(q["id"])
-    exam = await db.get_exam(q["exam_id"])
-    closed = bool(exam and exam["is_active"] and not await db.get_questions(q["exam_id"]))
-    if closed:  # savolsiz test o'quvchilarga ko'rinmaydi - admin ham uni "ochiq" deb o'ylamasin
-        await db.set_exam_active(q["exam_id"], False)
     text, kb = await _exam_view(q["exam_id"])
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
-    await callback.answer("O'chirildi. Savol qolmagani uchun test yopildi." if closed else "O'chirildi", show_alert=closed)
+    await callback.answer("O'chirildi")
