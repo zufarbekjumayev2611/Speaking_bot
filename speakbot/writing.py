@@ -30,8 +30,9 @@ log = logging.getLogger("writing")
 # "example" - languages.py dagi namuna kaliti.
 FIELDS = {
     "letter": {
-        "title": "Vaziyat va kelgan xat",
+        "title": "Vaziyat va kelgan xat (ixtiyoriy)",
         "short": "Kelgan xat",
+        "optional": True,  # ba'zi materiallarda har bir xatning vaziyati o'z ko'rsatmasida bo'ladi
         "limit": 1500,
         "words": (45, 110),
         "words_text": "vaziyat + xat ≈ 60–90 so'z, xatning o'zi 50–80 so'z",
@@ -47,7 +48,7 @@ FIELDS = {
     "inst1": {
         "title": "1-xat ko'rsatmasi (norasmiy)",
         "short": "1-xat ko'rsatmasi",
-        "limit": 500,
+        "limit": 1200,
         "words": (6, 45),
         "words_text": "1–2 gap",
         "hint": (
@@ -59,7 +60,7 @@ FIELDS = {
     "inst2": {
         "title": "2-xat ko'rsatmasi (rasmiy)",
         "short": "2-xat ko'rsatmasi",
-        "limit": 500,
+        "limit": 1200,
         "words": (6, 45),
         "words_text": "1–2 gap",
         "hint": (
@@ -163,8 +164,49 @@ def task_values(part: str | None, row: dict | None) -> dict:
     return {k: v for k, v in parse_legacy(part, row.get("text")).items() if v}
 
 
-def missing_fields(part: str | None, values: dict) -> list[str]:
-    return [f for f in fields_for(part) if not (values.get(f) or "").strip()]
+def missing_fields(part: str | None, values: dict, required_only: bool = True) -> list[str]:
+    """Kiritilmagan maydonlar; required_only=True - ixtiyoriylari (kelgan xat) hisobga olinmaydi."""
+    return [f for f in fields_for(part) if not (values.get(f) or "").strip()
+            and not (required_only and FIELDS[f].get("optional"))]
+
+
+# ---------------------------------------------------------------- butun topshiriqni bitta xabarda kiritish
+
+_N = r"(?:soru|görev|gorev|xat|topshiriq|task|e-?posta|mektup|savol|madde)"
+_BULK = {  # qator boshidagi belgilar: «1-Soru», «1. Görev», «1.1», «Task 1.2», «2-qism» ...
+    "inst1": [rf"1\s*[-–.)]?\s*{_N}", rf"{_N}\s*[-–]?\s*1\b(?![.,]\d)", r"1\.1\b", r"✉️\s*1-xat"],
+    "inst2": [rf"2\s*[-–.)]?\s*{_N}", rf"{_N}\s*[-–]?\s*2\b(?![.,]\d)", r"1\.2\b", r"✉️\s*2-xat"],
+    "essay": [rf"3\s*[-–.)]?\s*{_N}", rf"{_N}\s*[-–]?\s*3\b", r"2\s*[-–.)]?\s*(?:qism|bölüm|kısım|part)\b",
+              r"(?:part|bölüm|qism)\s*[-–]?\s*2\b(?![.,]\d)", r"📝\s*2-qism"],
+}
+
+
+def split_bulk(part: str | None, text: str) -> dict:
+    """Admin butun topshiriqni bitta xabarda yuborsa - «1-Soru / 2-Soru / 3-Soru (yoki 2-qism)» kabi
+    belgilar bo'yicha maydonlarga ajratadi. Kamida ikkita belgi topilmasa - {} (oddiy bitta maydon)."""
+    fields = fields_for(part)
+    wanted = [f for f in ("inst1", "inst2", "essay") if f in fields]
+    if len(wanted) < 2:
+        return {}
+    hits = []
+    for f in wanted:
+        pattern = re.compile(r"^[ \t*•#>]*(?:" + "|".join(_BULK[f]) + r")", re.IGNORECASE | re.MULTILINE)
+        m = pattern.search(text)
+        if m:
+            hits.append((m.start(), m.end(), f))
+    hits.sort()
+    if len(hits) < 2 or [h[2] for h in hits] != [f for f in wanted if f in {h[2] for h in hits}]:
+        return {}  # tartibi noto'g'ri yoki bitta belgi - ishonchsiz, bo'lmaymiz
+    values = {}
+    head = text[: hits[0][0]].strip()
+    if head and "letter" in fields:
+        values["letter"] = head
+    for i, (start, end, f) in enumerate(hits):
+        stop = hits[i + 1][0] if i + 1 < len(hits) else len(text)
+        body = text[end:stop].strip().lstrip(":.-–) ").strip()
+        if body:
+            values[f] = body
+    return values
 
 
 def component_task(part: str | None, values: dict, comp_key: str) -> tuple[str, str]:
