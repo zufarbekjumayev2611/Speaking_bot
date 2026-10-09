@@ -77,6 +77,9 @@ PORT = int(os.getenv("PORT", "8080"))
 
 # Premium: bepul foydalanuvchilar OYIGA nechta tekshiruv (speaking + writing) olishi mumkin.
 # PREMIUM_ENABLED=0 bo'lsa - hamma uchun cheklovsiz (premium tizimi o'chiriladi).
+# «📊 Natijalarim» bo'limi (o'quvchi o'z natijalari ro'yxatini ko'radi). Hozircha o'chiq:
+# yoqish uchun Render -> Environment'da SHOW_MY_RESULTS=1 qo'ying (kod tayyor).
+SHOW_MY_RESULTS = os.getenv("SHOW_MY_RESULTS", "0").strip().lower() in ("1", "true", "yes")
 PREMIUM_ENABLED = os.getenv("PREMIUM_ENABLED", "1").strip() not in ("0", "false", "no")
 FREE_MONTHLY_LIMIT = max(0, int(os.getenv("FREE_MONTHLY_LIMIT", "5")))
 STANDARD_MONTHLY_LIMIT = max(0, int(os.getenv("STANDARD_MONTHLY_LIMIT", "30")))  # Standard tarif: oyiga

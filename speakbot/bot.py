@@ -28,6 +28,7 @@ from aiogram.types import (
     WebAppInfo,
 )
 
+import config
 import db
 import grader
 import report
@@ -36,6 +37,7 @@ from access import check_access
 from config import EXAM_LANGUAGE, WEBAPP_URL, is_admin
 from languages import LANGUAGES
 from parts import part_info, parts_for, speaking_times
+import plans
 from premium import BTN_PREMIUM, OLD_PREMIUM_BUTTONS, premium_info
 
 LANG = LANGUAGES[EXAM_LANGUAGE]
@@ -51,6 +53,7 @@ BTN_SPEAKING = f"🎙 {SPEAKING_NAME}"
 BTN_WRITING = f"✍️ {WRITING_NAME}"
 BTN_ADMIN = "⚙️ Admin panel"
 BTN_RESULTS = "📊 Natijalarim"
+BTN_PROFILE = "👤 Profil"
 # eski klaviaturalar (bot yangilanishidan oldin chiqqan tugmalar) ham ishlashi uchun
 OLD_SPEAKING_BUTTONS = {"🎙 Imtihon topshirish", "🎙 Speaking"}
 OLD_WRITING_BUTTONS = {"✍️ Writing"}
@@ -102,8 +105,11 @@ def _part_from_key(key: str) -> str | None:
 
 
 def main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
-    rows = [[KeyboardButton(text=BTN_SPEAKING), KeyboardButton(text=BTN_WRITING)],
-            [KeyboardButton(text=BTN_RESULTS), KeyboardButton(text=BTN_PREMIUM)]]
+    rows = [[KeyboardButton(text=BTN_SPEAKING), KeyboardButton(text=BTN_WRITING)]]
+    if config.SHOW_MY_RESULTS:
+        rows += [[KeyboardButton(text=BTN_PROFILE), KeyboardButton(text=BTN_RESULTS)], [KeyboardButton(text=BTN_PREMIUM)]]
+    else:
+        rows.append([KeyboardButton(text=BTN_PROFILE), KeyboardButton(text=BTN_PREMIUM)])
     if is_admin(user_id):
         rows.append([KeyboardButton(text=BTN_ADMIN)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
@@ -179,21 +185,26 @@ async def _my_results_view(user_id: int, page: int):
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=kb)
 
 
-@router.message(F.text == BTN_RESULTS)
-@router.message(Command("natijalar", "results"))
+def _results_on(_event) -> bool:
+    """«Natijalarim» o'chiq bo'lsa, uning tugmalari tanilmagan deb hisoblanadi (fallback javob beradi)."""
+    return config.SHOW_MY_RESULTS
+
+
+@router.message(F.text == BTN_RESULTS, _results_on)
+@router.message(Command("natijalar", "results"), _results_on)
 async def my_results(message: Message):
     text, kb = await _my_results_view(message.from_user.id, 0)
     await message.answer(text, parse_mode="HTML", reply_markup=kb)
 
 
-@router.callback_query(F.data.startswith("mrp:"))
+@router.callback_query(F.data.startswith("mrp:"), _results_on)
 async def my_results_page(callback: CallbackQuery):
     text, kb = await _my_results_view(callback.from_user.id, max(0, int(callback.data.split(":")[1])))
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("mr:"))
+@router.callback_query(F.data.startswith("mr:"), _results_on)
 async def my_result_open(callback: CallbackQuery):
     _, code, rid = callback.data.split(":")
     kind = {v: k for k, v in _KIND_CODE.items()}.get(code)
@@ -211,6 +222,41 @@ async def my_result_open(callback: CallbackQuery):
         text = f"{KIND_ICON.get(kind, '')} <b>{e(r.get('title') or 'Test')}</b>\n🎯 {e(sc)} ({e(r.get('level') or '')})"
     text = f"📅 {report.local_date(r['created_at'])}\n" + text
     await grader.send_long(callback.bot, callback.from_user.id, text)
+
+
+# ---------- 👤 Profil ----------
+
+async def _profile_text(user) -> str:
+    uid = user.id
+    row = await db.get_user(uid) or {}
+    counts = await db.my_result_counts(uid)
+    lines = ["👤 <b>Profil</b>\n", f"Ism: <b>{e(user.full_name)}</b>"]
+    if user.username:
+        lines.append(f"Username: @{e(user.username)}")
+    lines.append(f"Telegram ID: <code>{uid}</code>")
+    if row.get("joined_at"):
+        lines.append(f"Botda: {report.local_date(row['joined_at'])[:10]} dan beri")
+    lines.append("")
+    if is_admin(uid):
+        lines.append("Tarif: 👮 <b>Admin</b> — cheklovsiz")
+    elif config.PREMIUM_ENABLED:
+        prem = await db.get_premium(uid)
+        plan = prem["plan"] if prem else "free"
+        until = f" ({report.local_date(prem['until'])[:10]} gacha)" if prem else ""
+        used, limit = await db.count_checks_month(uid), plans.limit_for(plan)
+        lines.append(f"Tarif: <b>{e(plans.name(plan))}</b>{until}")
+        lines.append(f"Bu oy: <b>{used}/{limit}</b> tekshiruv" if limit is not None else f"Bu oy: <b>{used}</b> tekshiruv (cheksiz)")
+    lines.append(f"\n📈 Topshirilgan: {KIND_ICON['speaking']} {SPEAKING_NAME} — <b>{counts.get('speaking', 0)}</b> ta • "
+                 f"{KIND_ICON['writing']} {WRITING_NAME} — <b>{counts.get('writing', 0)}</b> ta")
+    if not is_admin(uid) and config.PREMIUM_ENABLED:
+        lines.append(f"\nTarifni o'zgartirish: «{BTN_PREMIUM}».")
+    return "\n".join(lines)
+
+
+@router.message(F.text == BTN_PROFILE)
+@router.message(Command("profil", "profile"))
+async def profile(message: Message):
+    await message.answer(await _profile_text(message.from_user), parse_mode="HTML")
 
 
 @router.message(Command("status"))
@@ -731,6 +777,8 @@ async def _writing_task_view(exam: dict) -> tuple[list[str], list[list[InlineKey
         if value:
             ok, note = writing.field_note(f, value)
             lines.append(f"\n{i}. {'✅' if ok else '⚠️'} <b>{e(spec['short'])}</b> — {note}\n<i>{e(_preview(value))}</i>")
+        elif spec.get("optional"):
+            lines.append(f"\n{i}. ➖ <b>{e(spec['short'])}</b> — kiritilmagan (ixtiyoriy)")
         else:
             lines.append(f"\n{i}. ❗ <b>{e(spec['short'])}</b> — kiritilmagan")
     has_photo = bool(row and row.get("photo_file_id"))
@@ -744,7 +792,8 @@ async def _writing_task_view(exam: dict) -> tuple[list[str], list[list[InlineKey
     edit = [InlineKeyboardButton(text=f"✏️ {writing.FIELDS[f]['short']}", callback_data=f"wtf:{exam_id}:{f}") for f in fields]
     rows += [edit[i:i + 2] for i in range(0, len(edit), 2)]
     if len(fields) > 1:
-        label = "📝 Bosqichma-bosqich kiritish" if len(missing) == len(fields) else "📝 Hammasini qaytadan kiritish"
+        empty = writing.missing_fields(part, values, required_only=False)
+        label = "📝 Bosqichma-bosqich kiritish" if len(empty) == len(fields) else "📝 Hammasini qaytadan kiritish"
         rows.append([InlineKeyboardButton(text=label, callback_data=f"wtask:{exam_id}")])
     photo_row = [InlineKeyboardButton(text="🖼 Rasmni almashtirish" if has_photo else "🖼 Rasm qo'shish", callback_data=f"wph:{exam_id}")]
     if has_photo:
@@ -905,6 +954,11 @@ async def new_exam_part(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+def _looks_like_content(text: str) -> bool:
+    """Nom o'rniga savol / topshiriq yuborilgan (uzun yoki bir necha qatorli matn)."""
+    return len(text) > 80 or "\n" in text
+
+
 @router.message(NewExam.title)
 async def new_exam_title(message: Message, state: FSMContext):
     title = (message.text or "").strip()
@@ -912,15 +966,30 @@ async def new_exam_title(message: Message, state: FSMContext):
         return await message.answer("Nomni matn ko'rinishida yozing. Bekor qilish: /cancel")
     data = await state.get_data()
     kind = data.get("kind", "speaking")
+    content = _looks_like_content(title)
     exam_id = await db.create_exam(title[:100], kind, data.get("part"))
     await state.clear()
+
+    if content:  # nom o'rniga savol / topshiriq yuborildi - nomni o'zimiz qo'yamiz, matn yo'qolmaydi
+        auto = f"{'Mavzu' if kind == 'writing' else 'Test'} #{exam_id}"
+        await db.rename_exam(exam_id, auto)
+        note = (f"✅ Yaratildi. Nom avtomatik qo'yildi: <b>{auto}</b> (keyin «✏️ Nomini o'zgartirish» bilan "
+                "o'zgartirish mumkin). Yuborgan matningiz topshiriq sifatida qabul qilindi.\n\n")
+        if kind == "writing":
+            await _start_task_flow(message, state, exam_id, data.get("part"), silent=True)
+            return await _apply_task_text(message, state, title, intro=note)
+        await _ask_question_text(message, state, exam_id, silent=True)
+        await message.answer(note.strip(), parse_mode="HTML")
+        return await new_question_text(message, state)
 
     if kind == "writing":
         n = len(writing.fields_for(data.get("part")))
         intro = "✅ Mavzu yaratildi — topshiriq to'liq kiritilgach, o'quvchilar uni ko'radi.\n\n3/3: "
         if n > 1:
             intro += (f"topshiriq <b>{n} ta qism</b>dan iborat — har birini alohida xabar qilib yuborasiz, har biri "
-                      "yuborilishi bilan saqlanadi. Keyin istalgan qismni alohida tahrirlash mumkin.")
+                      "yuborilishi bilan saqlanadi. Keyin istalgan qismni alohida tahrirlash mumkin.\n"
+                      "💡 Butun topshiriqni bitta xabarda ham yuborishingiz mumkin («1-Soru … 2-Soru …» kabi) — "
+                      "bot uni o'zi qismlarga ajratadi.")
         else:
             intro += "topshiriq matni."
         return await _start_task_flow(message, state, exam_id, data.get("part"), intro=intro)
@@ -945,14 +1014,23 @@ def _field_prompt(field: str, i: int, total: int) -> str:
     return "\n".join(lines)
 
 
+def _skip_kb(field: str) -> InlineKeyboardMarkup | None:
+    if not writing.FIELDS[field].get("optional"):
+        return None
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+        text="⏭ Kelgan xat yo'q — o'tkazib yuborish", callback_data="wt_skip")]])
+
+
 async def _start_task_flow(message: Message, state: FSMContext, exam_id: int, part: str | None,
-                           fields: list[str] | None = None, intro: str = ""):
+                           fields: list[str] | None = None, intro: str = "", silent: bool = False):
     """`fields` - so'raladigan qismlar (standart: hammasi; bittasi - alohida tahrirlash)."""
     fields = fields or writing.fields_for(part)
     await state.clear()
     await state.set_state(WritingTask.text)
     await state.update_data(exam_id=exam_id, queue=fields, ti=0)
-    await message.answer((f"{intro}\n\n" if intro else "") + _field_prompt(fields[0], 0, len(fields)), parse_mode="HTML")
+    if not silent:
+        await message.answer((f"{intro}\n\n" if intro else "") + _field_prompt(fields[0], 0, len(fields)),
+                             parse_mode="HTML", reply_markup=_skip_kb(fields[0]))
 
 
 @router.callback_query(F.data.startswith("wtask:"))
@@ -990,37 +1068,78 @@ async def writing_task_save(message: Message, state: FSMContext):
     text = (message.text or message.caption or "").strip()
     if not text or text.startswith("/"):
         return await message.answer("Matn yuboring (rasm bo'lsa - izoh sifatida). Bekor qilish: /cancel")
+    await _apply_task_text(message, state, text)
+
+
+async def _next_step(message: Message, state: FSMContext, exam: dict, ack: str):
+    """Navbatdagi kiritilmagan qismni so'raydi; hammasi tayyor bo'lsa - mavzu sahifasi."""
+    data = await state.get_data()
+    queue, i = data.get("queue") or [], data.get("ti", 0) + 1
+    if i < len(queue):
+        await state.update_data(ti=i)
+        return await message.answer(f"{ack}\n\n{_field_prompt(queue[i], i, len(queue))}", parse_mode="HTML",
+                                    reply_markup=_skip_kb(queue[i]))
+    await state.clear()
+    await message.answer(ack, parse_mode="HTML")
+    view, kb = await _exam_view(exam["id"])
+    await message.answer(view, parse_mode="HTML", reply_markup=kb)
+
+
+async def _apply_task_text(message: Message, state: FSMContext, text: str, intro: str = ""):
     data = await state.get_data()
     exam = await db.get_exam(data.get("exam_id", 0))
     queue, i = data.get("queue") or [], data.get("ti", 0)
     if not exam or i >= len(queue):
         await state.clear()
         return await message.answer("Mavzu topilmadi. «📚 Testlar» bo'limidan qayta oching.")
-    field = queue[i]
-    spec = writing.FIELDS[field]
-    if len(text) > spec["limit"]:
-        return await message.answer(
-            f"Matn juda uzun ({len(text)} belgi). {spec['limit']} belgidan oshmasin — qisqartirib qayta yuboring."
-        )
-
     part = exam.get("part")
     values = writing.task_values(part, await db.get_writing_task(exam["id"]))
-    values[field] = text
+
+    bulk = writing.split_bulk(part, text) if len(queue) - i > 1 else {}
+    if bulk:  # butun topshiriq bitta xabarda - qismlarga ajratildi
+        too_long = [f for f, v in bulk.items() if len(v) > writing.FIELDS[f]["limit"]]
+        if too_long:
+            names = ", ".join(writing.FIELDS[f]["short"] for f in too_long)
+            return await message.answer(f"{intro}Juda uzun qism: {names}. Qisqartirib qayta yuboring.", parse_mode="HTML")
+        values.update(bulk)
+        notes = []
+        for f in writing.fields_for(part):
+            if f in bulk:
+                ok, note = writing.field_note(f, bulk[f])
+                notes.append(f"{'✅' if ok else '⚠️'} <b>{e(writing.FIELDS[f]['short'])}</b> — {note}")
+        ack = intro + f"✅ Topshiriq {len(bulk)} ta qismga ajratib saqlandi:\n" + "\n".join(notes)
+    else:
+        field = queue[i]
+        spec = writing.FIELDS[field]
+        if len(text) > spec["limit"]:
+            return await message.answer(
+                f"{intro}Matn juda uzun ({len(text)} belgi). {spec['limit']} belgidan oshmasin — qisqartirib qayta yuboring.",
+                parse_mode="HTML")
+        values[field] = text
+        ok, note = writing.field_note(field, text)
+        ack = intro + f"✅ <b>{e(spec['short'])}</b> saqlandi. {note}"
+        if not ok:
+            ack += f"\nTavsiyaga to'liq mos emas — kerak bo'lsa, keyin «✏️ {e(spec['short'])}» tugmasi bilan tahrirlang."
     await db.save_writing_task(exam["id"], writing.compose(part, values), json.dumps(values, ensure_ascii=False))
     if message.photo:  # rasm izoh bilan yuborilgan bo'lsa - topshiriq rasmi sifatida saqlanadi
         await db.set_writing_photo(exam["id"], message.photo[-1].file_id)
-    ok, note = writing.field_note(field, text)
-    ack = f"✅ <b>{e(spec['short'])}</b> saqlandi. {note}"
-    if not ok:
-        ack += f"\nTavsiyaga to'liq mos emas — kerak bo'lsa, keyin «✏️ {e(spec['short'])}» tugmasi bilan tahrirlang."
+    if bulk:
+        # ajratilgan qismlardan keyingi birinchi kiritilmagan majburiy qism so'raladi
+        missing = writing.missing_fields(part, values)
+        await state.update_data(queue=missing, ti=-1)
+    await _next_step(message, state, exam, ack)
 
-    if i + 1 < len(queue):
-        await state.update_data(ti=i + 1)
-        return await message.answer(f"{ack}\n\n{_field_prompt(queue[i + 1], i + 1, len(queue))}", parse_mode="HTML")
-    await state.clear()
-    await message.answer(ack, parse_mode="HTML")
-    view, kb = await _exam_view(exam["id"])
-    await message.answer(view, parse_mode="HTML", reply_markup=kb)
+
+@router.callback_query(WritingTask.text, F.data == "wt_skip")
+async def writing_task_skip(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    exam = await db.get_exam(data.get("exam_id", 0))
+    queue, i = data.get("queue") or [], data.get("ti", 0)
+    if not exam or i >= len(queue) or not writing.FIELDS[queue[i]].get("optional"):
+        return await callback.answer("Bu qismni o'tkazib bo'lmaydi.", show_alert=True)
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await _next_step(callback.message, state, exam, f"⏭ {e(writing.FIELDS[queue[i]]['short'])} — o'tkazib yuborildi.")
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("wph:"))
@@ -1255,7 +1374,7 @@ def _asks_photo(part: str | None) -> bool:
     return part != "1.1"
 
 
-async def _ask_question_text(message: Message, state: FSMContext, exam_id: int, intro: str = ""):
+async def _ask_question_text(message: Message, state: FSMContext, exam_id: int, intro: str = "", silent: bool = False):
     exam = await db.get_exam(exam_id)
     if not exam:
         await state.clear()
@@ -1269,6 +1388,8 @@ async def _ask_question_text(message: Message, state: FSMContext, exam_id: int, 
     await state.set_state(NewQuestion.text)
     await state.update_data(exam_id=exam_id, part=exam.get("part"), position=position, last_times=last_times)
     of = f" (jami {count} ta)" if count else ""
+    if silent:
+        return
     kb = None
     if questions:
         kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Tugatish", callback_data=f"q_done:{exam_id}")]])
