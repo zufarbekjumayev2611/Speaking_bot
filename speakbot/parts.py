@@ -84,7 +84,8 @@ SPEAKING_PARTS = {
     "2": {
         "name": "Part 2 — Monolog (7-savol)",
         "about": "Mavzu va 3 ta yo'naltiruvchi savol bo'yicha 1–2 daqiqa gapirish.",
-        "questions_hint": "1 ta savol: mavzu + 3 ta yo'naltiruvchi savol bitta matnda (1 daqiqa tayyorlanish, 2 daqiqa javob).",
+        "questions_hint": ("«➕ Savol qo'shish»: bot 3 ta yo'naltiruvchi savolni ketma-ket, keyin rasmni so'raydi. "
+                           "O'quvchi rasm va 3 savolni birga ko'rib, bitta javob beradi (1 daqiqa tayyorlanish, 2 daqiqa javob)."),
         "prep": 60, "answer": 120, "max": 5, "count": 1,
         "labels": {5: "B2 dan yuqori", 4: "yuqori B2", 3: "quyi B2", 2: "yuqori B1", 1: "quyi B1", 0: "B1 dan past"},
         "rubric": _SP_2,
@@ -93,9 +94,8 @@ SPEAKING_PARTS = {
         "name": "Part 3 — Munozara (8-savol)",
         "about": "Bahsli mavzu: yoqlovchi va qarshi fikrlar asosida taqdimot.",
         "questions_hint": (
-            "1 ta savol (1 daqiqa tayyorlanish, 2 daqiqa javob). Mini app'da jadval chiqishi uchun matnni "
-            "shunday yozing: 1-qatorda mavzu savoli, keyin «Lehine:» va uning ostida «- dalil» qatorlari, "
-            "keyin «Aleyhine:» va uning ostida «- dalil» qatorlari."
+            "«➕ Savol qo'shish»: bot sarlavhani, keyin 3 ta «Lehine» va 3 ta «Aleyhine» dalilni ketma-ket so'raydi. "
+            "O'quvchi ularni ikki ustunli jadvalda ko'radi (1 daqiqa tayyorlanish, 2 daqiqa javob)."
         ),
         "prep": 60, "answer": 120, "max": 6, "count": 1,
         "labels": {6: "C1 dan yuqori", 5: "C1", 4: "yuqori B2", 3: "quyi B2", 2: "yuqori B1", 1: "quyi B1", 0: "B1 dan past"},
