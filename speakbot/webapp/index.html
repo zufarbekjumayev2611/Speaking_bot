@@ -66,7 +66,7 @@
   .steps i.done { background: var(--turquoise); }
   .steps i.now { background: var(--cobalt); }
   .q-label { font-size: 13.5px; color: var(--hint); margin-bottom: 6px; }
-  .q-text { font-size: 21px; line-height: 1.35; font-weight: 600; letter-spacing: -0.01em; margin: 0 0 14px; }
+  .q-text { font-size: 21px; line-height: 1.35; font-weight: 600; letter-spacing: -0.01em; margin: 0 0 14px; white-space: pre-line; }
   .q-photo { width: 100%; max-height: 38vh; object-fit: contain; border-radius: 12px; background: var(--surface); margin-bottom: 8px; }
 
   .dial { position: relative; width: 210px; height: 210px; margin: 18px auto 8px; }
@@ -158,9 +158,9 @@
   <section id="question" hidden style="display:flex;flex-direction:column;flex:1">
     <div class="steps" id="steps"></div>
     <div class="q-label" id="qLabel"></div>
+    <img class="q-photo" id="qPhoto" alt="Savol rasmi" hidden />
     <p class="q-text" id="qText"></p>
     <div class="debate-wrap" id="qTable" hidden></div>
-    <img class="q-photo" id="qPhoto" alt="Savol rasmi" hidden />
     <div class="dial" id="dial">
       <svg viewBox="0 0 120 120" aria-hidden="true">
         <circle class="track" cx="60" cy="60" r="54" fill="none" stroke-width="6" />

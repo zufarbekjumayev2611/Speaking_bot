@@ -1374,6 +1374,44 @@ def _asks_photo(part: str | None) -> bool:
     return part != "1.1"
 
 
+# ---------- Part 2 va Part 3: savol bir necha qismdan bosqichma-bosqich yig'iladi ----------
+# Part 2: 3 ta yo'naltiruvchi savol -> rasm -> vaqt. O'quvchi rasm va 3 savolni BIRGA ko'radi, bitta javob beradi.
+# Part 3: sarlavha -> 3 ta «Lehine» -> 3 ta «Aleyhine» -> vaqt. Mini app'da ikki ustunli jadval bo'ladi.
+P2_EXAMPLES = ["Sizce mutluluk nedir?", "Mutlu olmak için neler yapabiliriz?", "İnsanlar hep mutlu olabilir mi?"]
+P3_TITLE_EXAMPLE = "Televizyon izlemek, insanlara bilgi verir ve genel kültürlerini geliştirmelerine yardımcı olabilir."
+P3_PRO_EXAMPLES = ["Televizyonda eğitim amaçlı yayınlar çoktur.",
+                   "Evde oturarak televizyonda film izlemek sinemaya gitmekten daha eğlencelidir.",
+                   "Televizyondaki reklamlar sayesinde alışveriş yapmak kolaydır."]
+P3_CON_EXAMPLES = ["Sürekli televizyon izlemek sağlık açısından zararlıdır.",
+                   "Televizyon programları çok kalitesizdir.",
+                   "Gün boyunca televizyon izlemek insanları tembelleştirir."]
+STRUCTURED = {"2": 3, "3": 7}  # qism -> nechta bo'lak so'raladi
+
+
+def _structured_prompt(part: str, step: int) -> str:
+    if part == "2":
+        return (f"✏️ <b>Part 2 — {step + 1}/3-yo'naltiruvchi savol</b>\n"
+                f"Masalan: <i>{e(P2_EXAMPLES[step])}</i>\n\n"
+                + ("3 ta savoldan keyin rasm so'raladi. " if step == 0 else "") + "Bekor qilish: /cancel")
+    if step == 0:
+        return ("📌 <b>Part 3 — sarlavha (munozara mavzusi)</b>\n"
+                f"Masalan: <i>{e(P3_TITLE_EXAMPLE)}</i>\n\n"
+                "Keyin 3 ta «Lehine» va 3 ta «Aleyhine» dalil so'raladi. Bekor qilish: /cancel")
+    side, i, ex = ("👍 Lehine (yoqlovchi)", step, P3_PRO_EXAMPLES) if step <= 3 else ("👎 Aleyhine (qarshi)", step - 3, P3_CON_EXAMPLES)
+    return f"{side} — <b>{i}/3-dalil</b>\nMasalan: <i>{e(ex[i - 1])}</i>\n\nBekor qilish: /cancel"
+
+
+def _structured_text(part: str, items: list[str]) -> str:
+    if part == "2":
+        return "\n".join(f"• {q}" for q in items)
+    return "\n".join([items[0], "Lehine:"] + [f"- {x}" for x in items[1:4]] + ["Aleyhine:"] + [f"- {x}" for x in items[4:7]])
+
+
+def _clean_item(text: str) -> str:
+    text = " ".join(text.split())  # bitta qator
+    return text.strip(" \"'«»“”").lstrip("-•*–— ").strip()[:400]
+
+
 async def _ask_question_text(message: Message, state: FSMContext, exam_id: int, intro: str = "", silent: bool = False):
     exam = await db.get_exam(exam_id)
     if not exam:
@@ -1387,6 +1425,11 @@ async def _ask_question_text(message: Message, state: FSMContext, exam_id: int, 
     await state.clear()
     await state.set_state(NewQuestion.text)
     await state.update_data(exam_id=exam_id, part=exam.get("part"), position=position, last_times=last_times)
+    if exam.get("part") in STRUCTURED:
+        await state.update_data(items=[])
+        if not silent:
+            await message.answer(intro + _structured_prompt(exam["part"], 0), parse_mode="HTML")
+        return
     of = f" (jami {count} ta)" if count else ""
     if silent:
         return
@@ -1429,8 +1472,11 @@ async def new_question_text(message: Message, state: FSMContext):
     text = (message.text or "").strip()
     if not text or text.startswith("/"):
         return await message.answer("Savolni matn ko'rinishida yozing. Bekor qilish: /cancel")
-    await state.update_data(text=text[:2500])
     data = await state.get_data()
+    part = data.get("part")
+    if part in STRUCTURED and "items" in data:
+        return await _structured_step(message, state, data, part, text)
+    await state.update_data(text=text[:2500])
     if not _asks_photo(data.get("part")):
         await state.update_data(photo=None)
         return await _ask_times(message, state)
@@ -1439,6 +1485,32 @@ async def new_question_text(message: Message, state: FSMContext):
     if part_info("speaking", data.get("part")).get("carry_photo") and data.get("position", 1) > 1:
         hint += " Yangi rasm shart emas — oldingi savoldagi rasm bu savolda ham ko'rinadi."
     await message.answer(hint, reply_markup=SKIP_PHOTO)
+
+
+async def _structured_step(message: Message, state: FSMContext, data: dict, part: str, text: str):
+    item = _clean_item(text)
+    if not item:
+        return await message.answer("Matn yozing. Bekor qilish: /cancel")
+    items = (data.get("items") or []) + [item]
+    await state.update_data(items=items)
+    if len(items) < STRUCTURED[part]:
+        return await message.answer(f"✅ Saqlandi.\n\n{_structured_prompt(part, len(items))}", parse_mode="HTML")
+    full = _structured_text(part, items)
+    if data.get("edit_qid"):  # tahrirlash: faqat matn yangilanadi (rasm va vaqt o'zgarmaydi)
+        await state.clear()
+        if not await db.get_question(data["edit_qid"]):
+            return await message.answer("Savol topilmadi (o'chirilgan bo'lishi mumkin).")
+        await db.update_question(data["edit_qid"], text=full)
+        return await _send_question(message, data["edit_qid"], "✅ Savol yangilandi.")
+    await state.update_data(text=full)
+    if part == "2":
+        await state.set_state(NewQuestion.photo)
+        return await message.answer(
+            f"✅ 3 ta savol tayyor:\n{e(full)}\n\n🖼 Endi <b>rasm</b> yuboring — o'quvchi shu rasmga qarab uchala "
+            "savolga bitta javob beradi.", parse_mode="HTML", reply_markup=SKIP_PHOTO)
+    await state.update_data(photo=None)
+    await message.answer(f"✅ Munozara tayyor:\n<i>{e(full)}</i>", parse_mode="HTML")
+    await _ask_times(message, state)
 
 
 async def _ask_times(message: Message, state: FSMContext):
@@ -1658,6 +1730,15 @@ async def edit_question_text_ask(callback: CallbackQuery, state: FSMContext):
     if not q:
         return await callback.answer("Savol topilmadi.", show_alert=True)
     await state.clear()
+    exam = await db.get_exam(q["exam_id"])
+    part = (exam or {}).get("part")
+    if part in STRUCTURED and (exam or {}).get("kind", "speaking") == "speaking":
+        # Part 2 / Part 3: qismlari qaytadan bosqichma-bosqich so'raladi
+        await state.set_state(NewQuestion.text)
+        await state.update_data(exam_id=q["exam_id"], part=part, items=[], edit_qid=q["id"])
+        await callback.message.answer(f"Hozirgi matn:\n<code>{e(q['text'])}</code>\n\n" + _structured_prompt(part, 0),
+                                      parse_mode="HTML")
+        return await callback.answer()
     await state.set_state(EditQuestion.text)
     await state.update_data(qid=q["id"])
     await callback.message.answer(f"Hozirgi matn:\n<code>{e(q['text'])}</code>\n\nYangi matnni yozing. Bekor qilish: /cancel",
