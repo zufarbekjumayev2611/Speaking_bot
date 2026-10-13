@@ -119,6 +119,9 @@ _MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN blocked INTEGER DEFAULT 0",
     "ALTER TABLE questions ADD COLUMN meta TEXT",  # writing topshirig'ining maydonlari (JSON)
     "ALTER TABLE users ADD COLUMN menu_ver INTEGER DEFAULT 0",  # foydalanuvchidagi pastki menyu versiyasi
+    # O'quvchining shaxsiy testi: owner_id - kim yaratgan (NULL - admin testi), expires_at - qachon o'chadi
+    "ALTER TABLE exams ADD COLUMN owner_id INTEGER",
+    "ALTER TABLE exams ADD COLUMN expires_at TEXT",
 ]
 
 
@@ -230,7 +233,7 @@ async def close_db():
 
 
 # «Yopish / ochish» tugmasi olib tashlandi - avval yopiq qolgan testlar ham o'quvchilarga ko'rinsin
-_ALL_OPEN = "UPDATE exams SET is_active = 1 WHERE is_active IS NULL OR is_active != 1"
+_ALL_OPEN = "UPDATE exams SET is_active = 1 WHERE (is_active IS NULL OR is_active != 1) AND owner_id IS NULL"
 
 
 async def init_db():
@@ -357,6 +360,70 @@ async def create_exam(title: str, kind: str = "speaking", part: str | None = Non
     return await _execute("INSERT INTO exams (title, kind, part, is_active) VALUES (?, ?, ?, 1)", (title, kind, part))
 
 
+PERSONAL_TTL_HOURS = 2  # o'quvchi yaratgan test shuncha soatdan keyin o'chadi (natijalari qoladi)
+
+
+async def create_personal_exam(owner_id: int, title: str, kind: str, part: str | None) -> int:
+    return await _execute(
+        f"""INSERT INTO exams (title, kind, part, is_active, owner_id, expires_at)
+            VALUES (?, ?, ?, 1, ?, datetime('now', '+{PERSONAL_TTL_HOURS} hours'))""",
+        (title, kind, part, owner_id),
+    )
+
+
+async def my_personal_exams(owner_id: int, kind: str | None = None):
+    """O'quvchining hali o'chmagan shaxsiy testlari (qolgan daqiqalar bilan)."""
+    kind_sql = "AND COALESCE(e.kind, 'speaking') = ?" if kind else ""
+    return await _fetchall(
+        f"""SELECT e.*, CAST((julianday(e.expires_at) - julianday('now')) * 1440 AS INTEGER) AS minutes_left,
+                   (SELECT COUNT(*) FROM questions q WHERE q.exam_id = e.id) AS q_count
+            FROM exams e
+            WHERE e.owner_id = ? AND e.expires_at IS NOT NULL AND e.expires_at > datetime('now') {kind_sql}
+            ORDER BY e.id""",
+        (owner_id, kind) if kind else (owner_id,),
+    )
+
+
+async def purge_expired_personal() -> int:
+    """Muddati o'tgan shaxsiy testlar: savollari (matn, rasm) o'chiriladi, test o'quvchiga yopiladi.
+    Test qatori nomi bilan qoladi - natijalar tarixida «qaysi test» ko'rinib tursin. Hozir topshirilayotgan
+    (oxirgi 30 daqiqada boshlangan) test kutib turiladi."""
+    rows = await _fetchall(
+        """SELECT e.id FROM exams e
+           WHERE e.owner_id IS NOT NULL AND e.expires_at IS NOT NULL AND e.expires_at <= datetime('now')
+             AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.exam_id = e.id AND a.status = 'in_progress'
+                             AND a.created_at > datetime('now', '-30 minutes'))"""
+    )
+    ids = [r["id"] for r in rows]
+    if ids:
+        marks = ",".join("?" * len(ids))
+        await _execute_many([
+            (f"DELETE FROM questions WHERE exam_id IN ({marks})", tuple(ids)),
+            (f"UPDATE exams SET is_active = 0, expires_at = NULL WHERE id IN ({marks})", tuple(ids)),
+        ])
+    return len(ids)
+
+
+async def archive_personal(exam_id: int):
+    """O'quvchi shaxsiy testini o'zi o'chirdi: savollari o'chadi, nomi natijalar tarixi uchun qoladi."""
+    await _execute_many([
+        ("DELETE FROM questions WHERE exam_id = ?", (exam_id,)),
+        ("UPDATE exams SET is_active = 0, expires_at = NULL WHERE id = ?", (exam_id,)),
+    ])
+
+
+def exam_open_for(exam: dict | None, user_id: int) -> bool:
+    """O'quvchi bu testni ocha oladimi: admin testi ochiq bo'lsa - hamma; shaxsiy test - faqat egasi va
+    muddati tugamagan bo'lsa."""
+    if not exam or not exam.get("is_active"):
+        return False
+    if exam.get("owner_id") is None:
+        return True
+    if exam["owner_id"] != user_id or not exam.get("expires_at"):
+        return False
+    return exam["expires_at"] > datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
 async def get_exam(exam_id: int):
     return await _fetchone("SELECT * FROM exams WHERE id = ?", (exam_id,))
 
@@ -366,7 +433,7 @@ async def list_exams():
         """SELECT e.*, (SELECT COUNT(*) FROM questions q WHERE q.exam_id = e.id) AS q_count,
                   (SELECT q.text FROM questions q WHERE q.exam_id = e.id ORDER BY q.position, q.id LIMIT 1) AS task_text,
                   (SELECT q.meta FROM questions q WHERE q.exam_id = e.id ORDER BY q.position, q.id LIMIT 1) AS task_meta
-           FROM exams e ORDER BY COALESCE(e.kind, 'speaking'), e.part, e.id DESC"""
+           FROM exams e WHERE e.owner_id IS NULL ORDER BY COALESCE(e.kind, 'speaking'), e.part, e.id DESC"""
     )
 
 
@@ -374,7 +441,7 @@ async def active_part_counts(kind: str) -> dict:
     """{part: nechta ochiq imtihon} - o'quvchiga faqat ichida imtihon bor turlar ko'rsatiladi."""
     rows = await _fetchall(
         """SELECT e.part, COUNT(*) AS cnt FROM exams e
-           WHERE e.is_active = 1 AND COALESCE(e.kind, 'speaking') = ?
+           WHERE e.is_active = 1 AND e.owner_id IS NULL AND COALESCE(e.kind, 'speaking') = ?
              AND EXISTS (SELECT 1 FROM questions q WHERE q.exam_id = e.id)
            GROUP BY e.part""",
         (kind,),
@@ -387,7 +454,7 @@ async def list_active_exams(kind: str, part: str | None):
     params = (kind, part) if part else (kind,)
     return await _fetchall(
         f"""SELECT e.* FROM exams e
-            WHERE e.is_active = 1 AND COALESCE(e.kind, 'speaking') = ? AND {part_sql}
+            WHERE e.is_active = 1 AND e.owner_id IS NULL AND COALESCE(e.kind, 'speaking') = ? AND {part_sql}
               AND EXISTS (SELECT 1 FROM questions q WHERE q.exam_id = e.id)
             ORDER BY e.id""",
         params,
@@ -402,7 +469,7 @@ async def active_exams_with_task(kind: str):
            FROM exams e
            JOIN questions q ON q.id = (SELECT q2.id FROM questions q2 WHERE q2.exam_id = e.id
                                        ORDER BY q2.position, q2.id LIMIT 1)
-           WHERE e.is_active = 1 AND COALESCE(e.kind, 'speaking') = ?
+           WHERE e.is_active = 1 AND e.owner_id IS NULL AND COALESCE(e.kind, 'speaking') = ?
            ORDER BY e.id""",
         (kind,),
     )

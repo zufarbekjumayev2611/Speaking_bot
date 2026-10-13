@@ -177,7 +177,7 @@ async def status(message: Message):
         return
     users = (await db._fetchone("SELECT COUNT(*) AS c FROM users"))["c"]
     exams = await db._fetchall(
-        "SELECT COALESCE(kind, 'speaking') AS kind, SUM(is_active) AS open, COUNT(*) AS total FROM exams GROUP BY 1"
+        "SELECT COALESCE(kind, 'speaking') AS kind, SUM(is_active) AS open, COUNT(*) AS total FROM exams WHERE owner_id IS NULL GROUP BY 1"
     )
     by_kind = {r["kind"]: r for r in exams}
     sp, wr = by_kind.get("speaking", {}), by_kind.get("writing", {})
@@ -372,6 +372,12 @@ async def refresh_loop():
             await db.load_settings()
         except Exception:
             log.warning("Keshlarni yangilab bo'lmadi", exc_info=True)
+        try:
+            n = await db.purge_expired_personal()  # o'quvchilarning 2 soatlik shaxsiy testlari
+            if n:
+                log.info("Muddati o'tgan %s ta shaxsiy test o'chirildi", n)
+        except Exception:
+            log.warning("Shaxsiy testlarni tozalab bo'lmadi", exc_info=True)
 
 
 async def drain_background(timeout: float = 25):
