@@ -111,7 +111,7 @@ async def start_exam(request: web.Request):
     user = _user_or_401(request)
     exam_id = int(request.match_info["exam_id"])
     exam = await db.get_exam(exam_id)
-    if not exam or not exam["is_active"] or (exam.get("kind") or "speaking") != "speaking":
+    if not db.exam_open_for(exam, user["id"]) or (exam.get("kind") or "speaking") != "speaking":
         return _error(404, "Bu imtihon hozir yopiq.")
     questions = await db.get_questions(exam_id)
     if not questions:
@@ -252,11 +252,15 @@ async def finish_exam(request: web.Request):
 
 # ---------- Yazma (writing) - imtihon rejimi ----------
 
-async def _writing_exam(exam_id: int, resume: bool = False) -> tuple[dict | None, dict | None, dict]:
+async def _writing_exam(exam_id: int, user_id: int, resume: bool = False) -> tuple[dict | None, dict | None, dict]:
     """(mavzu, topshiriq qatori, maydonlar) - mavzu ochiq va topshirig'i to'liq bo'lsagina.
     resume=True: o'quvchi saqlangan qoralamasini davom ettiryapti - mavzu yopilgan bo'lsa ham ochiladi."""
     exam = await db.get_exam(exam_id)
-    if not exam or (not exam["is_active"] and not resume) or exam.get("kind") != "writing":
+    if not exam or exam.get("kind") != "writing":
+        return None, None, {}
+    if exam.get("owner_id") is not None and exam["owner_id"] != user_id:
+        return None, None, {}  # boshqa o'quvchining shaxsiy testi
+    if not resume and not db.exam_open_for(exam, user_id):
         return None, None, {}
     row = await db.get_writing_task(exam_id)
     values = writing.task_values(exam.get("part"), row)
@@ -267,7 +271,7 @@ async def _writing_exam(exam_id: int, resume: bool = False) -> tuple[dict | None
 
 async def start_writing(request: web.Request):
     user = _user_or_401(request)
-    exam, row, values = await _writing_exam(int(request.match_info["exam_id"]), request.query.get("resume") == "1")
+    exam, row, values = await _writing_exam(int(request.match_info["exam_id"]), user["id"], request.query.get("resume") == "1")
     if not exam:
         return _error(404, "Bu mavzu hozir yopiq.")
     await db.save_user(user["id"], _full_name(user), user.get("username"))
@@ -305,7 +309,7 @@ async def submit_writing(request: web.Request):
         return _error(400, "So'rov noto'g'ri.")
 
     exam = await db.get_exam(exam_id)
-    if not exam or exam.get("kind") != "writing":
+    if not exam or exam.get("kind") != "writing" or exam.get("owner_id") not in (None, user["id"]):
         return _error(404, "Mavzu topilmadi.")
     bot: Bot = request.app["bot"]
     texts = {str(k): str(v or "") for k, v in texts.items()}
