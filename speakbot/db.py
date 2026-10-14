@@ -689,6 +689,36 @@ async def results_report(days: int | None = None):
     )
 
 
+async def users_for_api(plan: str | None, since: str | None, limit: int, offset: int):
+    """GET /api/users uchun: ro'yxatdan o'tgan foydalanuvchilar, tarifi va topshirgan testlari soni.
+    Har bir qatorda `total` - filtr bo'yicha jami soni (sahifalash uchun)."""
+    now = _now().strftime(_FMT)
+    where, params = [], [now, now]
+    if plan:
+        where.append("plan = ?")
+        params.append(plan)
+    if since:
+        where.append("joined_at >= ?")
+        params.append(since)
+    cond = ("WHERE " + " AND ".join(where)) if where else ""
+    return await _fetchall(
+        f"""SELECT *, COUNT(*) OVER () AS total FROM (
+               SELECT u.telegram_id, u.full_name, u.username, u.joined_at, COALESCE(u.blocked, 0) AS blocked,
+                      CASE WHEN p.until > ? THEN COALESCE(p.plan, 'pro') ELSE 'free' END AS plan,
+                      CASE WHEN p.until > ? THEN p.until END AS plan_until,
+                      (SELECT COUNT(*) FROM attempts a WHERE a.telegram_id = u.telegram_id AND a.status = 'done') AS speaking_count,
+                      (SELECT COUNT(*) FROM writing_submissions w WHERE w.telegram_id = u.telegram_id AND w.status = 'done') AS writing_count,
+                      NULLIF(MAX(COALESCE((SELECT MAX(a.created_at) FROM attempts a WHERE a.telegram_id = u.telegram_id), ''),
+                                 COALESCE((SELECT MAX(w.created_at) FROM writing_submissions w WHERE w.telegram_id = u.telegram_id), '')),
+                             '') AS last_activity
+               FROM users u LEFT JOIN premium p ON p.telegram_id = u.telegram_id
+               WHERE u.full_name IS NOT NULL
+           ) {cond}
+           ORDER BY joined_at DESC, telegram_id LIMIT ? OFFSET ?""",
+        tuple(params) + (limit, offset),
+    )
+
+
 # ---------- Adminlar ----------
 
 async def load_admins():

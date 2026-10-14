@@ -22,6 +22,7 @@ import html
 import plans
 import writing
 from access import acquire_check, check_access, get_plan, release_check
+import config
 from config import BOT_TOKEN, EXAM_LANGUAGE
 from languages import LANGUAGES
 from parts import part_info
@@ -326,12 +327,71 @@ async def submit_writing(request: web.Request):
     return web.json_response(result)
 
 
+# ---------- Tashqi tizim uchun: foydalanuvchilar ro'yxati ----------
+
+_API_PLANS = ("free", "standard", "pro")
+
+
+def _iso(stamp: str | None) -> str | None:
+    """Bazadagi UTC vaqt ("YYYY-MM-DD HH:MM:SS") -> ISO 8601 ("...T...Z")."""
+    return stamp.replace(" ", "T") + "Z" if stamp else None
+
+
+async def api_users(request: web.Request):
+    """GET /api/users - ro'yxatdan o'tgan foydalanuvchilar (faqat USERS_API_KEY bilan).
+    Parametrlar: plan=free|standard|pro, since=YYYY-MM-DD (shu sanadan keyin qo'shilganlar),
+    limit (standart 500, ko'pi bilan 1000), offset."""
+    key = config.USERS_API_KEY
+    if not key:
+        raise web.HTTPNotFound()  # kalit qo'yilmagan - endpoint umuman yo'qdek
+    auth = request.headers.get("Authorization", "")
+    token = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
+    if not token or not hmac.compare_digest(token.encode(), key.encode()):
+        log.warning("/api/users: noto'g'ri kalit (%s)", request.remote)
+        return _error(401, "Kalit noto'g'ri yoki berilmagan.")
+    q = request.query
+    plan = q.get("plan") or None
+    if plan and plan not in _API_PLANS:
+        return _error(400, "plan faqat free, standard yoki pro bo'lishi mumkin.")
+    since = q.get("since") or None
+    if since:
+        try:
+            since = time.strftime("%Y-%m-%d %H:%M:%S", time.strptime(since, "%Y-%m-%d"))
+        except ValueError:
+            return _error(400, "since formati: YYYY-MM-DD.")
+    try:
+        limit = min(max(int(q.get("limit", 500)), 1), 1000)
+        offset = max(int(q.get("offset", 0)), 0)
+    except ValueError:
+        return _error(400, "limit va offset butun son bo'lishi kerak.")
+    rows = await db.users_for_api(plan, since, limit, offset)
+    users = [
+        {
+            "telegram_id": r["telegram_id"],
+            "name": r["full_name"],
+            "username": r["username"],
+            "registered_at": _iso(r["joined_at"]),
+            "plan": r["plan"],
+            "plan_until": _iso(r["plan_until"]),
+            "speaking_count": r["speaking_count"],
+            "writing_count": r["writing_count"],
+            "last_activity": _iso(r["last_activity"]),
+            "blocked": bool(r["blocked"]),
+        }
+        for r in rows
+    ]
+    body = {"total": rows[0]["total"] if rows else 0, "limit": limit, "offset": offset, "users": users}
+    return web.json_response(body, headers={"Cache-Control": "no-store"},
+                             dumps=lambda o: json.dumps(o, ensure_ascii=False))
+
+
 def create_app(bot: Bot) -> web.Application:
     app = web.Application(client_max_size=MAX_AUDIO_BYTES + 1024 * 1024)
     app["bot"] = bot
     app.router.add_get("/", _page("index.html"))
     app.router.add_get("/writing", _page("writing.html"))
     app.router.add_get("/health", lambda r: web.Response(text="ok"))
+    app.router.add_get("/api/users", api_users)
     app.router.add_get(r"/api/exam/{exam_id:\d+}", start_exam)
     app.router.add_get(r"/api/photo/{question_id:\d+}", question_photo)
     app.router.add_post("/api/answer", upload_answer)

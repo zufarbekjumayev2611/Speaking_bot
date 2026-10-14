@@ -23,6 +23,7 @@ Telegram bot: ko'p darajali (multilevel) imtihon uchun Speaking va Writing'ni AI
 | `STANDARD_MONTHLY_LIMIT` | yo'q | Standard tarif: oyiga tekshiruvlar soni (standart `30`) |
 | `PREMIUM_ENABLED` | yo'q | `0` bo'lsa premium tizimi o'chiq, hamma cheklovsiz (standart `1`) |
 | `WEBAPP_URL` | yo'q | Render `RENDER_EXTERNAL_URL` ni o'zi beradi |
+| `USERS_API_KEY` | yo'q | Berilsa (kamida 16 belgi) `GET /api/users` ishlaydi — pastga qarang |
 
 3. **Baza saqlanishi:** SQLite fayl. Render'ning bepul rejasida fayl tizimi vaqtinchalik —
    har deploy/restartda imtihonlar va natijalar o'chadi. Doimiy saqlash uchun pullik reja + **Disk**
@@ -31,6 +32,21 @@ Telegram bot: ko'p darajali (multilevel) imtihon uchun Speaking va Writing'ni AI
 5. Deploy tugagach botga `/start` yuboring; admin sifatida «⚙️ Admin panel» ko'rinadi.
 
 Bepul rejada servis 15 daqiqa jimlikdan keyin uxlaydi; `main.py` o'zini har 10 daqiqada ping qilib turadi.
+
+## Foydalanuvchilar API (`GET /api/users`)
+
+Sherik yoki boshqa tizim Turso tokenisiz faqat foydalanuvchilar ro'yxatini olishi uchun.
+`USERS_API_KEY` qo'yilmasa endpoint o'chiq (404).
+
+```
+curl -H "Authorization: Bearer $USERS_API_KEY" "https://<servis>.onrender.com/api/users?plan=standard&limit=100"
+```
+
+Parametrlar: `plan` (`free` / `standard` / `pro`), `since` (`YYYY-MM-DD` — shu kundan keyin qo'shilganlar),
+`limit` (standart 500, ko'pi bilan 1000), `offset`. Javob:
+`{"total", "limit", "offset", "users": [{"telegram_id", "name", "username", "registered_at", "plan",
+"plan_until", "speaking_count", "writing_count", "last_activity", "blocked"}]}` (vaqtlar UTC, ISO 8601).
+Kalitni almashtirish uchun Render'da `USERS_API_KEY` ni o'zgartirib, qayta deploy qiling.
 
 ## Lokal ishga tushirish
 
