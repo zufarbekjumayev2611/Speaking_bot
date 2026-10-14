@@ -77,6 +77,12 @@ PORT = int(os.getenv("PORT", "8080"))
 
 # Premium: bepul foydalanuvchilar OYIGA nechta tekshiruv (speaking + writing) olishi mumkin.
 # PREMIUM_ENABLED=0 bo'lsa - hamma uchun cheklovsiz (premium tizimi o'chiriladi).
+# Sherik / tashqi tizim uchun foydalanuvchilar ro'yxati: GET /api/users, sarlavha
+# «Authorization: Bearer <USERS_API_KEY>». Kalit qo'yilmasa (yoki 16 belgidan qisqa bo'lsa) endpoint o'chiq.
+USERS_API_KEY = os.getenv("USERS_API_KEY", "").strip()
+if len(USERS_API_KEY) < 16:
+    USERS_API_KEY = ""
+
 # «📊 Natijalarim» bo'limi (o'quvchi o'z natijalari ro'yxatini ko'radi). Hozircha o'chiq:
 # yoqish uchun Render -> Environment'da SHOW_MY_RESULTS=1 qo'ying (kod tayyor).
 SHOW_MY_RESULTS = os.getenv("SHOW_MY_RESULTS", "0").strip().lower() in ("1", "true", "yes")
