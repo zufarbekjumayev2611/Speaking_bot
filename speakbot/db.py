@@ -776,7 +776,7 @@ def _now() -> datetime:
 
 
 async def get_premium(telegram_id: int) -> dict | None:
-    """Faol premium: {"until": ..., "plan": "standard" | "pro"} yoki None (tugagan / yo'q)."""
+    """Faol premium: {"until": ..., "plan": "standard" | "pro" | "vip"} yoki None (tugagan / yo'q)."""
     row = await _fetchone("SELECT until, plan FROM premium WHERE telegram_id = ?", (telegram_id,))
     if row and row["until"] > _now().strftime(_FMT):
         return {"until": row["until"], "plan": row["plan"] or "pro"}
@@ -867,16 +867,15 @@ async def premium_history(telegram_id: int, limit: int = 5):
     )
 
 
-async def count_checks_month(telegram_id: int) -> int:
-    """Shu oy (O'zbekiston vaqti, UTC+5) yakunlangan speaking + writing tekshiruvlari soni."""
-    row = await _fetchone(
-        """SELECT
-             (SELECT COUNT(*) FROM attempts WHERE telegram_id = ?1 AND status = 'done'
-                AND strftime('%Y-%m', created_at, '+5 hours') = strftime('%Y-%m', 'now', '+5 hours'))
-           + (SELECT COUNT(*) FROM writing_submissions WHERE telegram_id = ?1 AND status = 'done'
-                AND strftime('%Y-%m', created_at, '+5 hours') = strftime('%Y-%m', 'now', '+5 hours')) AS c""",
-        (telegram_id,),
-    )
+async def count_checks(telegram_id: int, kind: str, since: str | None = None) -> int:
+    """Yakunlangan tekshiruvlar soni (kind: speaking | writing). since berilsa (UTC "YYYY-MM-DD HH:MM:SS") -
+    shu vaqtdan beri, aks holda shu kalendar oyda (O'zbekiston vaqti, UTC+5)."""
+    table = "attempts" if kind == "speaking" else "writing_submissions"
+    if since:
+        cond, params = "created_at >= ?", (telegram_id, since)
+    else:
+        cond, params = "strftime('%Y-%m', created_at, '+5 hours') = strftime('%Y-%m', 'now', '+5 hours')", (telegram_id,)
+    row = await _fetchone(f"SELECT COUNT(*) AS c FROM {table} WHERE telegram_id = ? AND status = 'done' AND {cond}", params)
     return row["c"]
 
 
@@ -905,7 +904,8 @@ async def get_stats() -> dict:
     )
     row["standard"] = await count_active_premium("standard")
     row["pro"] = await count_active_premium("pro")
-    row["premium"] = row["standard"] + row["pro"]
+    row["vip"] = await count_active_premium("vip")
+    row["premium"] = row["standard"] + row["pro"] + row["vip"]
     return row
 
 
@@ -954,7 +954,7 @@ async def set_blocked(telegram_id: int, blocked: bool):
 # ---------- Ommaviy xabar uchun auditoriya ----------
 
 async def broadcast_ids(audience: str) -> list[int]:
-    """audience: all | free | standard | pro | premium"""
+    """audience: all | free | standard | pro | vip | premium"""
     now = _now().strftime(_FMT)
     base = ("SELECT u.telegram_id FROM users u LEFT JOIN premium p ON p.telegram_id = u.telegram_id AND p.until > ? "
             "WHERE COALESCE(u.blocked, 0) = 0 AND u.full_name IS NOT NULL")  # botga yozmagan (faqat bloklangan) - yo'q
@@ -963,6 +963,7 @@ async def broadcast_ids(audience: str) -> list[int]:
         "free": " AND p.telegram_id IS NULL",
         "standard": " AND p.plan = 'standard'",
         "pro": " AND p.plan = 'pro'",
+        "vip": " AND p.plan = 'vip'",
         "premium": " AND p.telegram_id IS NOT NULL",
     }[audience]
     return [r["telegram_id"] for r in await _fetchall(base + cond, (now,))]

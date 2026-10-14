@@ -24,6 +24,7 @@ AUDIENCES = {
     "free": "🆓 Bepul foydalanuvchilarga",
     "standard": "⭐ Standard obunachilarga",
     "pro": "💎 Pro obunachilarga",
+    "vip": "👑 VIP obunachilarga",
 }
 SEND_DELAY = 0.05  # soniyasiga ~20 ta xabar (Telegram limiti ~30)
 _running = False

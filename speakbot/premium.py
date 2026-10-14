@@ -18,6 +18,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 import config
 import db
 import plans
+from access import usage_text
 from config import ADMIN_IDS, PREMIUM_ENABLED, is_admin, is_owner
 
 log = logging.getLogger("premium")
@@ -86,7 +87,7 @@ def _btn(text: str, data: str) -> InlineKeyboardButton:
 
 
 def _limit_line(plan: str) -> str:
-    return f"{plans.name(plan)} — {plans.limit_text(plan)}"
+    return plans.offer_line(plan)
 
 
 # ======================================================================
@@ -117,19 +118,14 @@ async def premium_info(message: Message, state: FSMContext):
 
     prem = await db.get_premium(uid)
     plan = prem["plan"] if prem else "free"
-    used = await db.count_checks_month(uid)
-    limit = plans.limit_for(plan)
-    usage = f"{used}/{limit}" if limit is not None else f"{used} (cheksiz)"
-    lines = [
-        "🚀 <b>Tarifni yaxshilash</b>\n",
-        "<b>Tariflar:</b>",
-        f"🆓 Bepul — {plans.limit_text('free')} tekshiruv",
-        f"⭐ Standard — {plans.limit_text('standard')} tekshiruv",
-        f"💎 Pro — {plans.limit_text('pro')} tekshiruv + <b>2 ekspert</b> baholashi (ball aniqroq)",
+    lines = ["🚀 <b>Tarifni yaxshilash</b>\n", "<b>Tariflar</b> (Konuşma va Yazma alohida hisoblanadi):"]
+    lines += [f"• {plans.offer_line(p)}" for p in plans.PLANS]
+    lines += [
+        "\n<i>2 ekspert baholashi — ishingizni ikki mustaqil AI ekspert baholaydi, ball aniqroq chiqadi. "
+        "Standard, Pro va VIP'da o'z testingizni yaratish ham mumkin.</i>",
         "",
-        f"Sizning tarifingiz: <b>{e(plans.name(plan))}</b>"
-        + (f" ({_local(prem['until'])} gacha)" if prem else ""),
-        f"Bu oy: <b>{usage}</b> tekshiruv",
+        f"Sizning tarifingiz: <b>{e(plans.name(plan))}</b>" + (f" ({_local(prem['until'])} gacha)" if prem else ""),
+        await usage_text(uid),
     ]
     if not prem:
         lines += ["", e(await db.get_setting(INFO_KEY, DEFAULT_INFO))]
@@ -193,13 +189,14 @@ def _guard(callback: CallbackQuery) -> bool:
 async def _premium_view():
     rows = await db.list_active_premium(12)
     std, pro = await db.count_active_premium("standard"), await db.count_active_premium("pro")
+    vip = await db.count_active_premium("vip")
     soon = await db.list_expiring_premium(7, 6)
-    lines = [f"💎 <b>Premium</b>\n⭐ Standard: <b>{std}</b> • 💎 Pro: <b>{pro}</b>\n"]
+    lines = [f"💎 <b>Premium</b>\n⭐ Standard: <b>{std}</b> • 💎 Pro: <b>{pro}</b> • 👑 VIP: <b>{vip}</b>\n"]
     if not PREMIUM_ENABLED:
         lines.append("⚠️ Premium tizimi o'chirilgan (PREMIUM_ENABLED=0) — hamma uchun cheksiz.\n")
     for r in rows:
         lines.append(f"• {plans.PLANS.get(r['plan'], plans.PLANS['pro'])['icon']} {_who(r)} — {_local(r['until'])} gacha")
-    total = std + pro
+    total = std + pro + vip
     if total > len(rows):
         lines.append(f"… va yana {total - len(rows)} ta")
     if soon:
@@ -246,11 +243,9 @@ async def _ask_plan(target: Message, state: FSMContext, user: dict):
     current = await db.get_premium(user["telegram_id"])
     now = f"\nHozir: <b>{e(plans.name(current['plan']))}</b>, {_local(current['until'])} gacha" if current else ""
     await target.answer(
-        f"👤 {_who(user)}{now}\n\nQaysi tarif?\n"
-        f"⭐ Standard — {plans.limit_text('standard')}\n💎 Pro — {plans.limit_text('pro')}",
+        f"👤 {_who(user)}{now}\n\nQaysi tarif?\n" + "\n".join(plans.offer_line(p) for p in plans.PAID),
         parse_mode="HTML",
-        reply_markup=_kb([[_btn("⭐ Standard", f"pgp:{user['telegram_id']}:standard"),
-                           _btn("💎 Pro", f"pgp:{user['telegram_id']}:pro")]]),
+        reply_markup=_kb([[_btn(plans.name(p), f"pgp:{user['telegram_id']}:{p}") for p in plans.PAID]]),
     )
 
 
@@ -355,7 +350,8 @@ async def grant_note(message: Message, state: FSMContext):
     delivered = await _notify(
         message.bot, target,
         f"{e(plans.name(plan))} <b>faollashtirildi!</b>\nTugash sanasi: <b>{_local(until)}</b>\n"
-        f"Limit: {plans.limit_text(plan)} tekshiruv.\n\nOmad! 🎉",
+        f"Har 30 kunda: {plans.limits_text(plan)}"
+        + (" • 2 ekspert baholashi" if plans.raters_for(plan) > 1 else "") + ".\n\nOmad! 🎉",
     )
     text, kb = await _premium_view()
     warn = "" if delivered else "\n⚠️ Foydalanuvchiga xabar yetkazilmadi (u botga /start bosmagan yoki botni to'xtatgan)."
@@ -440,12 +436,14 @@ async def revoke_do(callback: CallbackQuery):
 async def _settings_view():
     info = await db.get_setting(INFO_KEY, DEFAULT_INFO)
     text = (
-        "⚙️ <b>Sozlamalar</b>\n\n<b>Oylik tekshiruv limitlari:</b>\n"
-        + "\n".join(f"• {e(_limit_line(p))}" for p in plans.PLANS)
+        "⚙️ <b>Sozlamalar</b>\n\n<b>Tariflar</b> (bepul — kalendar oy, pullik — har 30 kun):\n"
+        + "\n".join(f"• {_limit_line(p)}" for p in plans.PLANS)
+        + "\n\nO'zgartirish uchun tarifni tanlang (Konuşma limiti, Yazma limiti, narx)."
         + f"\n\n<b>To'lov ma'lumoti</b> (o'quvchi «🚀 Tarifni yaxshilash» bo'limida ko'radi):\n<i>{e(info)}</i>"
     )
     kb = _kb([
-        [_btn("✏️ Bepul", "lim:free"), _btn("✏️ Standard", "lim:standard"), _btn("✏️ Pro", "lim:pro")],
+        [_btn(f"✏️ {plans.name(p)}", f"lim:{p}") for p in list(plans.PLANS)[:2]],
+        [_btn(f"✏️ {plans.name(p)}", f"lim:{p}") for p in list(plans.PLANS)[2:]],
         [_btn("📝 To'lov ma'lumoti matni", "pi_edit")],
         [_btn("⬅️ Orqaga", "admin")],
     ])
@@ -462,22 +460,38 @@ async def settings_menu(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+_FIELD_LABEL = {"speaking": "🎙 Konuşma limiti", "writing": "✍️ Yazma limiti", "price": "💰 Narx"}
+
+
 @router.callback_query(F.data.startswith("lim:"))
-async def limit_edit(callback: CallbackQuery, state: FSMContext):
+async def limit_plan(callback: CallbackQuery, state: FSMContext):
+    """lim:<tarif> - qaysi qiymatni o'zgartirish; lim:<tarif>:<speaking|writing|price> - qiymat so'raladi."""
     if not _guard(callback):
         return await callback.answer()
-    plan = callback.data.split(":")[1]
+    bits = callback.data.split(":")
+    plan = bits[1] if len(bits) > 1 else ""
     if plan not in plans.PLANS:
         return await callback.answer()
     await state.clear()
+    if len(bits) == 2:
+        fields = ["speaking", "writing"] + ([] if plan == "free" else ["price"])
+        kb = _kb([[_btn(_FIELD_LABEL[f], f"lim:{plan}:{f}") for f in fields], [_btn("⬅️ Orqaga", "adm_settings")]])
+        await callback.message.edit_text(f"{_limit_line(plan)}\n\nNimani o'zgartiramiz?", parse_mode="HTML", reply_markup=kb)
+        return await callback.answer()
+    field = bits[2]
+    if field not in _FIELD_LABEL or (field == "price" and plan == "free"):
+        return await callback.answer()
     await state.set_state(LimitEdit.value)
-    await state.update_data(plan=plan)
-    await callback.message.answer(
-        f"{e(plans.name(plan))}: hozir <b>{e(plans.limit_text(plan))}</b>.\n\n"
-        "Oyiga necha ta tekshiruv bo'lsin? Raqam yozing (masalan <code>10</code>) yoki cheksiz uchun "
-        "<code>cheksiz</code> deb yozing. Bekor qilish: /cancel",
-        parse_mode="HTML",
-    )
+    await state.update_data(plan=plan, field=field)
+    if field == "price":
+        now, ask = plans.money(plans.price_for(plan)), "Yangi narxni so'mda yozing (masalan <code>30000</code>)."
+    else:
+        lim = plans.limit_for(plan, field)
+        period = "oyiga" if plan == "free" else "har 30 kunda"
+        now = "cheksiz" if lim is None else f"{period} {lim} ta"
+        ask = f"{period.capitalize()} necha ta bo'lsin? Raqam yozing yoki cheksiz uchun <code>cheksiz</code>."
+    await callback.message.answer(f"{e(plans.name(plan))} — {_FIELD_LABEL[field]}: hozir <b>{e(now)}</b>.\n\n{ask} "
+                                  "Bekor qilish: /cancel", parse_mode="HTML")
     await callback.answer()
 
 
@@ -485,15 +499,24 @@ async def limit_edit(callback: CallbackQuery, state: FSMContext):
 async def limit_save(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return await _not_admin(message, state)
-    text = (message.text or "").strip().lower()
-    if text in ("cheksiz", "unlimited", "-"):
-        value = "unlimited"
-    elif text.isdigit() and 0 <= int(text) <= 100000:
-        value = str(int(text))
+    data = await state.get_data()
+    plan, field = data.get("plan"), data.get("field", "speaking")
+    if plan not in plans.PLANS:
+        await state.clear()
+        return await message.answer("Jarayon uzilib qolgan. «⚙️ Sozlamalar» dan qaytadan boshlang.")
+    text = (message.text or "").strip().lower().replace(" ", "").replace("so'm", "").replace("сум", "")
+    if field == "price":
+        if not text.isdigit() or not 0 < int(text) <= 100_000_000:
+            return await message.answer("Narxni raqam bilan yozing (masalan 30000).")
+        await db.set_setting(f"price_{plan}", str(int(text)))
     else:
-        return await message.answer("Raqam (0 dan 100000 gacha) yoki «cheksiz» yozing.")
-    plan = (await state.get_data())["plan"]
-    await db.set_setting(f"limit_{plan}", value)
+        if text in ("cheksiz", "unlimited", "-"):
+            value = "unlimited"
+        elif text.isdigit() and 0 <= int(text) <= 100000:
+            value = str(int(text))
+        else:
+            return await message.answer("Raqam (0 dan 100000 gacha) yoki «cheksiz» yozing.")
+        await db.set_setting(f"limit_{plan}_{field}", value)
     await state.clear()
     view, kb = await _settings_view()
     await message.answer("✅ Saqlandi.")
@@ -669,9 +692,7 @@ async def users_menu(callback: CallbackQuery, state: FSMContext):
 async def _user_card(user: dict):
     uid = user["telegram_id"]
     prem = await db.get_premium(uid)
-    plan = "pro" if is_admin(uid) else (prem["plan"] if prem else "free")
-    used = await db.count_checks_month(uid)
-    limit = plans.limit_for(plan)
+    plan = "vip" if is_admin(uid) else (prem["plan"] if prem else "free")
     status = f"{e(plans.name(plan))}" + (f" — <b>{_local(prem['until'])}</b> gacha" if prem else "")
     if is_admin(uid):
         status += " • 👮 admin"
@@ -680,7 +701,7 @@ async def _user_card(user: dict):
     lines = [
         f"👤 {_who(user)}",
         status,
-        f"Bu oy tekshiruvlar: <b>{used}</b>" + (f" / {limit}" if limit is not None else " (cheksiz)"),
+        await usage_text(uid),
     ]
     results = await db.user_results(uid, 5)
     if results:
@@ -767,7 +788,7 @@ async def stats_view(callback: CallbackQuery):
         f"👥 Foydalanuvchilar: <b>{s['users']}</b> (bugun +{s['new_today']}, 7 kunda +{s['new_week']})\n"
         f"🔥 Oxirgi 7 kunda faol: <b>{s['active_week']}</b>\n"
         f"🚫 Bloklangan: <b>{s['blocked']}</b>\n\n"
-        f"⭐ Standard: <b>{s['standard']}</b> • 💎 Pro: <b>{s['pro']}</b>\n"
+        f"⭐ Standard: <b>{s['standard']}</b> • 💎 Pro: <b>{s['pro']}</b> • 👑 VIP: <b>{s['vip']}</b>\n"
         f"🧾 30 kunda berilgan obunalar: <b>{s['grants_month']}</b>\n\n"
         f"🎙 Speaking: <b>{s['speaking']}</b> • ✍️ Writing: <b>{s['writing']}</b>\n"
         f"📅 Tekshiruvlar — bugun: <b>{s['today']}</b>, 7 kun: <b>{s['week']}</b>, 30 kun: <b>{s['month']}</b>"

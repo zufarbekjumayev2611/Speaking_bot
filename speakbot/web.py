@@ -119,7 +119,7 @@ async def start_exam(request: web.Request):
         return _error(404, "Bu imtihonda hali savol yo'q.")
 
     await db.save_user(user["id"], _full_name(user), user.get("username"))
-    allowed, reason = await check_access(user["id"])
+    allowed, reason = await check_access(user["id"], "speaking")
     if not allowed:
         return _error(403, reason)
     # mini app qayta ochilsa (yoki «Qayta urinish») - yangi bo'sh urinish yaratilmaydi, oxirgisi davom etadi
@@ -216,7 +216,7 @@ async def finish_exam(request: web.Request):
             return _error(400, "Ovozingiz eshitilmadi — mikrofon ishlamayotgan bo'lishi mumkin. Mikrofonni tekshirib, "
                                "imtihonni qaytadan boshlang. Bu urinish limitga kirmadi.")
         # Imtihon davomida limit tugagan bo'lishi mumkin (masalan, bir vaqtda bir nechta imtihon ochilgan)
-        allowed, reason = await acquire_check(user["id"])
+        allowed, reason = await acquire_check(user["id"], "speaking")
         if not allowed:
             return _error(403, reason)
         try:
@@ -225,7 +225,7 @@ async def finish_exam(request: web.Request):
             result = await grader.grade_speaking(answers, part, plans.raters_for(await get_plan(user["id"])))
             await db.finish_attempt(attempt_id, result["total"], result["level"], result, result["raw"])
         finally:
-            release_check(user["id"])
+            release_check(user["id"], "speaking")
     except Exception as e:
         log.exception("Baholash xatosi (attempt %s)", attempt_id)
         if getattr(e, "status", None) == 429:
@@ -276,7 +276,7 @@ async def start_writing(request: web.Request):
     if not exam:
         return _error(404, "Bu mavzu hozir yopiq.")
     await db.save_user(user["id"], _full_name(user), user.get("username"))
-    allowed, reason = await check_access(user["id"])
+    allowed, reason = await check_access(user["id"], "writing")
     if not allowed:
         return _error(403, reason)
     part = exam.get("part")
@@ -329,7 +329,7 @@ async def submit_writing(request: web.Request):
 
 # ---------- Tashqi tizim uchun: foydalanuvchilar ro'yxati ----------
 
-_API_PLANS = ("free", "standard", "pro")
+_API_PLANS = ("free", "standard", "pro", "vip")
 
 
 def _iso(stamp: str | None) -> str | None:
@@ -352,7 +352,7 @@ async def api_users(request: web.Request):
     q = request.query
     plan = q.get("plan") or None
     if plan and plan not in _API_PLANS:
-        return _error(400, "plan faqat free, standard yoki pro bo'lishi mumkin.")
+        return _error(400, "plan faqat free, standard, pro yoki vip bo'lishi mumkin.")
     since = q.get("since") or None
     if since:
         try:
