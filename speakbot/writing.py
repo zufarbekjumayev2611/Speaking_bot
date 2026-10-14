@@ -356,7 +356,7 @@ async def grade_and_store(bot, user_id: int, user_name: str, exam: dict, texts: 
         prev = await db.find_recent_writing(user_id, exam["id"], joined)
         if prev and prev.get("result_json"):
             return json.loads(prev["result_json"]), False
-        allowed, reason = await acquire_check(user_id)
+        allowed, reason = await acquire_check(user_id, "writing")
         if not allowed:
             raise WritingDenied(reason)
         reserved = True
@@ -379,7 +379,7 @@ async def grade_and_store(bot, user_id: int, user_name: str, exam: dict, texts: 
     finally:
         _inflight.discard(key)
         if reserved:
-            release_check(user_id)
+            release_check(user_id, "writing")
 
     try:
         await grader.send_long(bot, user_id, grader.result_message(exam["title"], info["name"], result))

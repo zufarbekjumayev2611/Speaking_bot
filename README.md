@@ -19,8 +19,6 @@ Telegram bot: ko'p darajali (multilevel) imtihon uchun Speaking va Writing'ni AI
 | `TURSO_DATABASE_URL` | tavsiya | `libsql://<baza>.turso.io` — berilsa, ma'lumotlar Turso'da saqlanadi (deploy/restartda o'chmaydi, disk kerak emas) |
 | `TURSO_AUTH_TOKEN` | Turso bilan | Turso token (`turso db tokens create <baza>`) |
 | `DB_PATH` | disk bilan | `/var/data/speakbot.db` (Disk mount: `/var/data`) |
-| `FREE_MONTHLY_LIMIT` | yo'q | Bepul tarif: oyiga tekshiruvlar soni (standart `5`) |
-| `STANDARD_MONTHLY_LIMIT` | yo'q | Standard tarif: oyiga tekshiruvlar soni (standart `30`) |
 | `PREMIUM_ENABLED` | yo'q | `0` bo'lsa premium tizimi o'chiq, hamma cheklovsiz (standart `1`) |
 | `WEBAPP_URL` | yo'q | Render `RENDER_EXTERNAL_URL` ni o'zi beradi |
 | `USERS_API_KEY` | yo'q | Berilsa (kamida 16 belgi) `GET /api/users` ishlaydi — pastga qarang |
@@ -54,17 +52,20 @@ Kalitni almashtirish uchun Render'da `USERS_API_KEY` ni o'zgartirib, qayta deplo
 
 ## Tariflar va admin panel
 
-**Tariflar** (oylik tekshiruv limiti, speaking + writing birga; oy O'zbekiston vaqti bilan 1-sanada yangilanadi):
+**Tariflar** — Konuşma va Yazma limiti **alohida** hisoblanadi:
 
-| Tarif | Standart limit | Qo'shimcha |
-|---|---|---|
-| 🆓 Bepul | oyiga **5** ta | — |
-| ⭐ Standard | oyiga 30 ta | — |
-| 💎 Pro | cheksiz | 2 mustaqil «ekspert» baholaydi (ball aniqroq) |
+| Tarif | Konuşma | Yazma | Narx | Qo'shimcha |
+|---|---|---|---|---|
+| 🆓 Bepul | oyiga 2 | oyiga 2 | — | — |
+| ⭐ Standard | 30 | 30 | 30 000 so'm / 30 kun | o'z testini yaratish |
+| 💎 Pro | 60 | 60 | 50 000 so'm / 30 kun | 2 ekspert baholashi, o'z testini yaratish |
+| 👑 VIP | 100 | 100 | 70 000 so'm / 30 kun | 2 ekspert baholashi, o'z testini yaratish |
 
-Limitlar admin paneldagi **⚙️ Sozlamalar** orqali o'zgartiriladi (raqam yoki «cheksiz»). Boshlang'ich qiymatlar muhit o'zgaruvchilaridan: `FREE_MONTHLY_LIMIT` (5), `STANDARD_MONTHLY_LIMIT` (30). `PREMIUM_ENABLED=0` bo'lsa hamma cheksiz.
+Bepul limit kalendar oyda (O'zbekiston vaqti, 1-sanada) yangilanadi; pullik limit — obunaning har 30 kunlik
+davrida (60 kunga berilsa — ikki davr). Limit va narxlar admin paneldagi **⚙️ Sozlamalar** orqali o'zgartiriladi.
+`PREMIUM_ENABLED=0` bo'lsa hamma cheksiz.
 
-**To'lov qo'lda:** 👥 Foydalanuvchilar → foydalanuvchini tanlang (yoki 💎 Premium → ➕ Premium berish) → tarif (Standard/Pro) → muddat (30/90/180/365 yoki istalgan kun) → to'lov izohi. Foydalanuvchiga xabar boradi; faol obunaga qayta berilsa, muddat uzayadi. Tugashiga 3 kun qolganda bot foydalanuvchiga o'zi eslatadi.
+**To'lov qo'lda:** 👥 Foydalanuvchilar → foydalanuvchini tanlang (yoki 💎 Premium → ➕ Premium berish) → tarif (Standard/Pro/VIP) → muddat (30/90/180/365 yoki istalgan kun) → to'lov izohi. Foydalanuvchiga xabar boradi; faol obunaga qayta berilsa, muddat uzayadi. Tugashiga 3 kun qolganda bot foydalanuvchiga o'zi eslatadi.
 
 **Admin panel:**
 - 📚 Testlar: yaratish, nomini o'zgartirish, nusxalash, ochish/yopish, o'chirish, «hamma testlarni o'chirish» (tasdiqlash bilan).

@@ -34,7 +34,7 @@ import db
 import grader
 import report
 import writing
-from access import check_access, get_plan
+from access import check_access, get_plan, usage_text
 from config import EXAM_LANGUAGE, WEBAPP_URL, is_admin
 from languages import LANGUAGES
 from parts import part_info, parts_for, speaking_times
@@ -244,9 +244,8 @@ async def _profile_text(user) -> str:
         prem = await db.get_premium(uid)
         plan = prem["plan"] if prem else "free"
         until = f" ({report.local_date(prem['until'])[:10]} gacha)" if prem else ""
-        used, limit = await db.count_checks_month(uid), plans.limit_for(plan)
         lines.append(f"Tarif: <b>{e(plans.name(plan))}</b>{until}")
-        lines.append(f"Bu oy: <b>{used}/{limit}</b> tekshiruv" if limit is not None else f"Bu oy: <b>{used}</b> tekshiruv (cheksiz)")
+        lines.append(await usage_text(uid))
     lines.append(f"\n📈 Topshirilgan: {KIND_ICON['speaking']} {SPEAKING_NAME} — <b>{counts.get('speaking', 0)}</b> ta • "
                  f"{KIND_ICON['writing']} {WRITING_NAME} — <b>{counts.get('writing', 0)}</b> ta")
     if not is_admin(uid) and config.PREMIUM_ENABLED:
@@ -346,7 +345,7 @@ async def speaking_menu_cb(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("sp:"))
 async def speaking_part(callback: CallbackQuery, state: FSMContext):
-    allowed, reason = await check_access(callback.from_user.id)
+    allowed, reason = await check_access(callback.from_user.id, "speaking")
     if not allowed:
         return await callback.answer(reason, show_alert=True)
     await state.clear()
@@ -431,7 +430,7 @@ def _cancel_kb() -> InlineKeyboardMarkup:
 @router.callback_query(F.data.startswith("wt:"))
 async def writing_topic(callback: CallbackQuery, state: FSMContext):
     """Mavzu tanlandi: topshiriqni ko'rsatib, yozish usulini tanlatadi."""
-    allowed, reason = await check_access(callback.from_user.id)
+    allowed, reason = await check_access(callback.from_user.id, "writing")
     if not allowed:
         return await callback.answer(reason, show_alert=True)
     exam, row, values = await _open_writing_task(int(callback.data.split(":")[1]), callback.from_user.id)
@@ -475,7 +474,7 @@ def _ask_component_text(part: str | None, values: dict, step: int) -> str:
 
 @router.callback_query(F.data.startswith("wchat:"))
 async def writing_chat_start(callback: CallbackQuery, state: FSMContext):
-    allowed, reason = await check_access(callback.from_user.id)
+    allowed, reason = await check_access(callback.from_user.id, "writing")
     if not allowed:
         return await callback.answer(reason, show_alert=True)
     exam, _, values = await _open_writing_task(int(callback.data.split(":")[1]), callback.from_user.id)

@@ -87,9 +87,7 @@ if len(USERS_API_KEY) < 16:
 # yoqish uchun Render -> Environment'da SHOW_MY_RESULTS=1 qo'ying (kod tayyor).
 SHOW_MY_RESULTS = os.getenv("SHOW_MY_RESULTS", "0").strip().lower() in ("1", "true", "yes")
 PREMIUM_ENABLED = os.getenv("PREMIUM_ENABLED", "1").strip() not in ("0", "false", "no")
-FREE_MONTHLY_LIMIT = max(0, int(os.getenv("FREE_MONTHLY_LIMIT", "5")))
-STANDARD_MONTHLY_LIMIT = max(0, int(os.getenv("STANDARD_MONTHLY_LIMIT", "30")))  # Standard tarif: oyiga
-# Pro tarif - cheksiz (admin paneldagi «Sozlamalar»dan har bir tarif limitini o'zgartirish mumkin)
+# Tariflar, limitlar va narxlar - plans.py (admin «⚙️ Sozlamalar»dan o'zgartiriladi)
 
 # Bloklangan foydalanuvchilar (bazadan yuklanadi): bot ularga javob bermaydi.
 BLOCKED_IDS: set[int] = set()
