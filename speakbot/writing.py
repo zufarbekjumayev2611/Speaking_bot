@@ -21,7 +21,7 @@ import re
 import db
 import grader
 import plans
-from access import acquire_check, get_plan, release_check
+from access import acquire_check, get_plan, is_own, release_check
 from parts import part_info
 
 log = logging.getLogger("writing")
@@ -356,10 +356,11 @@ async def grade_and_store(bot, user_id: int, user_name: str, exam: dict, texts: 
         prev = await db.find_recent_writing(user_id, exam["id"], joined)
         if prev and prev.get("result_json"):
             return json.loads(prev["result_json"]), False
-        allowed, reason = await acquire_check(user_id, "writing")
-        if not allowed:
-            raise WritingDenied(reason)
-        reserved = True
+        if not is_own(exam, user_id):  # o'z testi - limitsiz
+            allowed, reason = await acquire_check(user_id, "writing")
+            if not allowed:
+                raise WritingDenied(reason)
+            reserved = True
         row = await db.get_writing_task(exam["id"])
         values = task_values(part, row)
         tasks = {c["key"]: grading_task(part, values, c["key"]) or (row or {}).get("text", "") for c in comps}

@@ -72,5 +72,22 @@ def offer_line(plan: str) -> str:
     return line
 
 
+def bar(used: int, limit: int | None, width: int = 10) -> str:
+    """Sarf chizig'i: ▰▰▰▱▱▱▱▱▱▱ (cheksiz - to'liq bo'sh chiziq o'rniga ∞)."""
+    if limit is None:
+        return "∞"
+    if limit <= 0:
+        return "▱" * width
+    full = min(width, round(width * used / limit))
+    return "▰" * full + "▱" * (width - full)
+
+
+def per_mock(plan: str) -> int | None:
+    """1 ta tekshiruv narxi (so'm) - tariflarni solishtirish uchun."""
+    total = (limit_for(plan, "speaking") or 0) + (limit_for(plan, "writing") or 0)
+    price = price_for(plan)
+    return round(price / total) if price and total else None
+
+
 def raters_for(plan: str) -> int:
     return max(RATERS, _info(plan)["raters"])

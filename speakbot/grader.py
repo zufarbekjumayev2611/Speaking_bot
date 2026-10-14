@@ -422,9 +422,18 @@ def result_message(title: str, part_name: str, r: dict) -> str:
     icon = "✍️" if r.get("kind") == "writing" else "🎙"
     note_labels = notes_for(r.get("kind", "speaking"))
     many = len(r["components"]) > 1
+    if r.get("total") is not None:
+        got, top = r["total"], r.get("max_total", MAX_SCORE)
+    else:
+        got, top = r.get("raw", 0), r.get("max_raw") or 1
+    filled = min(10, round(10 * float(got or 0) / float(top or 1)))
     lines = [
         f"{icon} <b>{_e(title)}</b>",
-        f"<i>{_e(part_name)}</i>\n",
+        f"<i>{_e(part_name)}</i>",
+        "━━━━━━━━━━━━━━━━",
+        f"🏅 <b>Natija: {float(got):g} / {top:g}</b> — {_e(r.get('level') or '')}",
+        "▰" * filled + "▱" * (10 - filled),
+        "━━━━━━━━━━━━━━━━\n",
     ]
     for c in r["components"]:
         words = f", {c['words']} so'z" if c.get("words") is not None else ""

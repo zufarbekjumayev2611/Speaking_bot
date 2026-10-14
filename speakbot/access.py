@@ -50,13 +50,19 @@ def _local_date(stamp: str) -> str:
     return (datetime.strptime(stamp, _FMT) + timedelta(hours=5)).strftime("%d.%m.%Y")
 
 
-async def check_access(user_id: int, kind: str, _extra: int = 0) -> tuple[bool, str]:
-    """(ruxsat bormi, ruxsat yo'q bo'lsa foydalanuvchiga xabar). kind: speaking | writing."""
+def is_own(exam: dict | None, user_id: int) -> bool:
+    """O'quvchi o'zi yaratgan test: uni cheksiz topshiradi (limit test yaratilganda bir marta olingan)."""
+    return bool(exam and exam.get("owner_id") == user_id)
+
+
+async def check_access(user_id: int, kind: str, _extra: int = 0, exam: dict | None = None) -> tuple[bool, str]:
+    """(ruxsat bormi, ruxsat yo'q bo'lsa foydalanuvchiga xabar). kind: speaking | writing.
+    exam - o'quvchining o'z testi bo'lsa, limit tekshirilmaydi."""
     if is_admin(user_id):
         return True, ""
     if user_id in config.BLOCKED_IDS:
         return False, "Siz botdan foydalanishdan chetlatilgansiz. Savollar bo'lsa admin bilan bog'laning."
-    if not PREMIUM_ENABLED:
+    if not PREMIUM_ENABLED or is_own(exam, user_id):
         return True, ""
     u = await usage(user_id, kind)
     if u["limit"] is None:
@@ -112,3 +118,17 @@ async def usage_text(user_id: int) -> str:
     if info["next_reset"]:
         return f"Shu 30 kunda: {text}\n(yangi davr {_local_date(info['next_reset'])} da)"
     return f"Shu davrda: {text}"
+
+
+async def usage_block(user_id: int) -> str:
+    """Profil va tarif sahifasi uchun chiroyli blok: har bo'lim bo'yicha chiziq va qachon yangilanishi."""
+    lines, info = [], None
+    for kind, icon in (("speaking", "🎙"), ("writing", "✍️")):
+        info = await usage(user_id, kind)
+        lim = "∞" if info["limit"] is None else str(info["limit"])
+        lines.append(f"{icon} {plans.KIND_LABEL[kind]}  {plans.bar(info['used'], info['limit'])}  <b>{info['used']}/{lim}</b>")
+    if info["plan"] == "free":
+        lines.append("🔄 Limit har oyning 1-sanasida yangilanadi")
+    elif info["next_reset"]:
+        lines.append(f"🔄 Yangi 30 kunlik davr: {_local_date(info['next_reset'])}")
+    return "\n".join(lines)

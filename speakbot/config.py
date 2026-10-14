@@ -95,6 +95,8 @@ BLOCKED_IDS: set[int] = set()
 # Admin paneldan qo'shilgan adminlar (bazadan yuklanadi). ADMIN_IDS - asosiy adminlar (egalar):
 # ularni panel orqali o'chirib bo'lmaydi.
 EXTRA_ADMIN_IDS: set[int] = set()
+# Qo'shilgan adminlarning huquqlari: {id: {"tests", "users", ...}}; ro'yxatda yo'q - hamma bo'lim ochiq (roles.py)
+ADMIN_PERMS: dict[int, set[str]] = {}
 
 
 def is_owner(user_id: int) -> bool:

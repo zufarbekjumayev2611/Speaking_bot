@@ -21,7 +21,7 @@ import html
 
 import plans
 import writing
-from access import acquire_check, check_access, get_plan, release_check
+from access import acquire_check, check_access, get_plan, is_own, release_check
 import config
 from config import BOT_TOKEN, EXAM_LANGUAGE
 from languages import LANGUAGES
@@ -119,7 +119,7 @@ async def start_exam(request: web.Request):
         return _error(404, "Bu imtihonda hali savol yo'q.")
 
     await db.save_user(user["id"], _full_name(user), user.get("username"))
-    allowed, reason = await check_access(user["id"], "speaking")
+    allowed, reason = await check_access(user["id"], "speaking", exam=exam)
     if not allowed:
         return _error(403, reason)
     # mini app qayta ochilsa (yoki «Qayta urinish») - yangi bo'sh urinish yaratilmaydi, oxirgisi davom etadi
@@ -215,17 +215,20 @@ async def finish_exam(request: web.Request):
             # ovoz umuman eshitilmadi (mikrofon o'chiq / noto'g'ri qurilma) - limit sarflanmaydi
             return _error(400, "Ovozingiz eshitilmadi — mikrofon ishlamayotgan bo'lishi mumkin. Mikrofonni tekshirib, "
                                "imtihonni qaytadan boshlang. Bu urinish limitga kirmadi.")
+        exam = await db.get_exam(attempt["exam_id"])
+        own = is_own(exam, user["id"])  # o'z testi - limitsiz
         # Imtihon davomida limit tugagan bo'lishi mumkin (masalan, bir vaqtda bir nechta imtihon ochilgan)
-        allowed, reason = await acquire_check(user["id"], "speaking")
-        if not allowed:
-            return _error(403, reason)
+        if not own:
+            allowed, reason = await acquire_check(user["id"], "speaking")
+            if not allowed:
+                return _error(403, reason)
         try:
-            exam = await db.get_exam(attempt["exam_id"])
             part = exam.get("part") if exam else None
             result = await grader.grade_speaking(answers, part, plans.raters_for(await get_plan(user["id"])))
             await db.finish_attempt(attempt_id, result["total"], result["level"], result, result["raw"])
         finally:
-            release_check(user["id"], "speaking")
+            if not own:
+                release_check(user["id"], "speaking")
     except Exception as e:
         log.exception("Baholash xatosi (attempt %s)", attempt_id)
         if getattr(e, "status", None) == 429:
@@ -276,7 +279,7 @@ async def start_writing(request: web.Request):
     if not exam:
         return _error(404, "Bu mavzu hozir yopiq.")
     await db.save_user(user["id"], _full_name(user), user.get("username"))
-    allowed, reason = await check_access(user["id"], "writing")
+    allowed, reason = await check_access(user["id"], "writing", exam=exam)
     if not allowed:
         return _error(403, reason)
     part = exam.get("part")

@@ -18,7 +18,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 import config
 import db
 import plans
-from access import usage_text
+from access import usage_block, usage_text
 from config import ADMIN_IDS, PREMIUM_ENABLED, is_admin, is_owner
 
 log = logging.getLogger("premium")
@@ -31,7 +31,7 @@ OLD_PREMIUM_BUTTONS = {"💎 Premium"}  # eski klaviaturalardagi tugma ham ishla
 DEFAULT_INFO = "Obuna narxi va to'lov usullari uchun admin bilan bog'laning."
 DURATIONS = [30, 90, 180, 365]
 INFO_KEY = "premium_info"
-USERS_PER_PAGE = 8
+USERS_PER_PAGE = 10
 
 
 class PremGrant(StatesGroup):
@@ -118,17 +118,27 @@ async def premium_info(message: Message, state: FSMContext):
 
     prem = await db.get_premium(uid)
     plan = prem["plan"] if prem else "free"
-    lines = ["🚀 <b>Tarifni yaxshilash</b>\n", "<b>Tariflar</b> (Konuşma va Yazma alohida hisoblanadi):"]
-    lines += [f"• {plans.offer_line(p)}" for p in plans.PLANS]
+    badges = {"pro": "  🔥 <i>eng ommabop</i>", "vip": "  💰 <i>eng foydali</i>"}
+    lines = ["🚀 <b>Tarifni yaxshilash</b>", "━━━━━━━━━━━━━━━━"]
+    for p in plans.PLANS:
+        mark = "  ✅ <i>sizda</i>" if p == plan else badges.get(p, "")
+        head = f"<b>{plans.name(p)}</b>" + (f" — <b>{plans.money(plans.price_for(p))}</b> / {plans.PERIOD_DAYS} kun" if p != "free" else "")
+        extra = [plans.limits_text(p)]
+        if plans.raters_for(p) > 1:
+            extra.append("2 ekspert baholashi")
+        if plans.per_mock(p):
+            extra.append(f"≈ {plans.money(plans.per_mock(p))} / test")
+        lines += [f"{head}{mark}", "   " + " • ".join(extra), ""]
     lines += [
-        "\n<i>2 ekspert baholashi — ishingizni ikki mustaqil AI ekspert baholaydi, ball aniqroq chiqadi. "
-        "Standard, Pro va VIP'da o'z testingizni yaratish ham mumkin.</i>",
+        "━━━━━━━━━━━━━━━━",
+        "ℹ️ Har bir test topshirish yoki <b>o'z testingizni yaratish</b> — 1 limit. O'zingiz yaratgan testni "
+        "<b>cheksiz</b> topshirasiz. <i>2 ekspert</i> — ishingizni ikki mustaqil AI ekspert baholaydi, ball aniqroq.",
         "",
-        f"Sizning tarifingiz: <b>{e(plans.name(plan))}</b>" + (f" ({_local(prem['until'])} gacha)" if prem else ""),
-        await usage_text(uid),
+        f"📌 Sizning tarifingiz: <b>{e(plans.name(plan))}</b>" + (f" — {_local(prem['until'])} gacha" if prem else ""),
+        await usage_block(uid),
+        "",
+        f"💳 <b>Obuna bo'lish:</b> {e(await db.get_setting(INFO_KEY, DEFAULT_INFO))}",
     ]
-    if not prem:
-        lines += ["", e(await db.get_setting(INFO_KEY, DEFAULT_INFO))]
     await message.answer("\n".join(lines), parse_mode="HTML")
 
 
@@ -445,7 +455,7 @@ async def _settings_view():
         [_btn(f"✏️ {plans.name(p)}", f"lim:{p}") for p in list(plans.PLANS)[:2]],
         [_btn(f"✏️ {plans.name(p)}", f"lim:{p}") for p in list(plans.PLANS)[2:]],
         [_btn("📝 To'lov ma'lumoti matni", "pi_edit")],
-        [_btn("⬅️ Orqaga", "admin")],
+        [_btn("⬅️ Boss paneli", "boss")],
     ])
     return text, kb
 
@@ -561,23 +571,23 @@ async def info_save(message: Message, state: FSMContext):
 # ======================================================================
 
 async def _admins_view(viewer_id: int):
-    lines = ["👮 <b>Adminlar</b>\n", "<b>Asosiy adminlar</b> (o'chirib bo'lmaydi):"]
+    import roles  # aylana importdan qochish uchun shu yerda
+    lines = ["👮 <b>Adminlar va huquqlar</b>\n", "👑 <b>Boss</b> (Render'dagi ADMIN_IDS — hamma huquq, o'chirib bo'lmaydi):"]
     for uid in ADMIN_IDS:
         u = await db.get_user(uid) or {"telegram_id": uid}
         lines.append(f"• {_who(u)}")
     extra = await db.list_admins()
-    lines.append("\n<b>Qo'shilgan adminlar:</b>" if extra else "\nQo'shilgan adminlar yo'q.")
+    lines.append("\n👮 <b>Adminlar</b> (bosib huquqlarini o'zgartiring):" if extra else "\nQo'shilgan adminlar yo'q.")
     rows = []
     for a in extra:
-        lines.append(f"• {_who(a)}")
-        if is_owner(viewer_id):
-            label = (a.get("full_name") or str(a["telegram_id"]))[:30]
-            rows.append([_btn(f"🗑 {label}", f"adr:{a['telegram_id']}")])
-    if is_owner(viewer_id):
-        rows.append([_btn("➕ Admin qo'shish", "ad_add")])
-    else:
-        lines.append("\n<i>Adminlarni faqat asosiy adminlar o'zgartira oladi.</i>")
-    rows.append([_btn("⬅️ Orqaga", "admin")])
+        perms = roles.perms_of(a["telegram_id"])
+        summary = ("hamma bo'lim" if perms == set(roles.SECTIONS) else
+                   ", ".join(roles.SECTIONS[k][0].split(" ", 1)[1] for k in roles.SECTIONS if k in perms) or "hech narsa")
+        lines.append(f"• {_who(a)} — <i>{e(summary)}</i>")
+        label = (a.get("full_name") or str(a["telegram_id"]))[:30]
+        rows.append([_btn(f"🔐 {label}", f"prm:{a['telegram_id']}")])
+    rows.append([_btn("➕ Admin qo'shish", "ad_add")])
+    rows.append([_btn("⬅️ Boss paneli", "boss")])
     return "\n".join(lines), _kb(rows)
 
 
@@ -632,7 +642,7 @@ async def admin_remove_ask(callback: CallbackQuery):
     await callback.message.edit_text(
         f"👤 {_who(u)}\n\nAdminlikdan olamizmi?",
         parse_mode="HTML",
-        reply_markup=_kb([[_btn("✅ Ha, olish", f"adrd:{uid}"), _btn("❌ Yo'q", "adm_admins")]]),
+        reply_markup=_kb([[_btn("✅ Ha, olish", f"adrd:{uid}"), _btn("❌ Yo'q", f"prm:{uid}")]]),
     )
     await callback.answer()
 
@@ -660,8 +670,11 @@ async def _users_view(page: int):
     pages = max(1, -(-total // USERS_PER_PAGE))
     page = min(max(page, 0), pages - 1)
     users = await db.list_users(page * USERS_PER_PAGE, USERS_PER_PAGE)
-    lines = [f"👥 <b>Foydalanuvchilar</b> — jami {total} ta (sahifa {page + 1}/{pages})\n"
-             "Foydalanuvchini tanlang yoki ID/@username bo'yicha qidiring."]
+    first = page * USERS_PER_PAGE + 1
+    which = "Oxirgi qo'shilganlar" if page == 0 else "Ro'yxat"
+    lines = [f"👥 <b>Foydalanuvchilar</b> — jami {total} ta\n━━━━━━━━━━━━━━━━\n"
+             f"{which} ({first}–{min(total, first + USERS_PER_PAGE - 1)}). "
+             "Kerakli odamni 🔎 qidiruv orqali tez topasiz: ID, @username yoki ism."]
     rows = []
     for u in users:
         mark = "🚫 " if u["blocked"] else (plans.PLANS[u["plan"] or "pro"]["icon"] + " " if u["is_premium"] else "")
@@ -669,12 +682,12 @@ async def _users_view(page: int):
         rows.append([_btn(f"{mark}{label}", f"usr:{u['telegram_id']}")])
     nav = []
     if page > 0:
-        nav.append(_btn("◀️", f"adm_users:{page - 1}"))
+        nav.append(_btn("◀️ Yangiroq", f"adm_users:{page - 1}"))
     if page < pages - 1:
-        nav.append(_btn("▶️", f"adm_users:{page + 1}"))
+        nav.append(_btn("Eskiroq ▶️", f"adm_users:{page + 1}"))
     if nav:
         rows.append(nav)
-    rows.append([_btn("🔎 Qidirish", "usr_search")])
+    rows.append([_btn("🔎 Qidirish (ID, @username, ism)", "usr_search")])
     rows.append([_btn("⬅️ Orqaga", "admin")])
     return "\n".join(lines), _kb(rows)
 
@@ -766,12 +779,18 @@ async def user_search_start(callback: CallbackQuery, state: FSMContext):
 async def user_search(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return await _not_admin(message, state)
-    user = await _resolve(message)
-    if not user:
-        return
+    found = await db.search_users(message.text or "", limit=10)
+    if not found:
+        return await message.answer("Hech kim topilmadi. ID, @username yoki ismning bir qismini yozing. Bekor qilish: /cancel")
     await state.clear()
-    text, kb = await _user_card(user)
-    await message.answer(text, parse_mode="HTML", reply_markup=kb)
+    if len(found) == 1:
+        text, kb = await _user_card({**found[0], "known": True})
+        return await message.answer(text, parse_mode="HTML", reply_markup=kb)
+    rows = [[_btn((u.get("full_name") or u.get("username") or str(u["telegram_id"]))[:40], f"usr:{u['telegram_id']}")]
+            for u in found]
+    rows.append([_btn("⬅️ Ro'yxat", "adm_users:0")])
+    more = " (ko'pi bilan 10 tasi — aniqroq yozing)" if len(found) == 10 else ""
+    await message.answer(f"🔎 Topildi: {len(found)} ta{more}. Tanlang:", reply_markup=_kb(rows))
 
 
 # ======================================================================

@@ -16,6 +16,8 @@ from aiohttp import web
 
 import db
 import ops
+import roles
+from boss import router as boss_router
 from bot import router
 from broadcast import reminder_loop, router as broadcast_router
 from premium import BlockMiddleware, router as premium_router
@@ -34,7 +36,9 @@ def build_dispatcher(bot: Bot) -> Dispatcher:
     dp.include_router(router)
     dp.include_router(premium_router)
     dp.include_router(broadcast_router)
+    dp.include_router(boss_router)
     dp.update.outer_middleware(BlockMiddleware())
+    dp.callback_query.outer_middleware(roles.PermissionMiddleware())  # adminga yopiq bo'limlar
     ops.setup(dp, bot)  # oxirida: tanilmagan tugma/xabar, xatolar, /status
     return dp
 
