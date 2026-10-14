@@ -121,6 +121,66 @@
   .note { color: var(--hint); font-size: 13.5px; }
   .tips { padding-left: 18px; margin: 0; line-height: 1.5; }
   .tips li { margin-bottom: 6px; }
+
+  /* ================= Dizayn: hero kartalar, ball halqasi, kartalar ================= */
+  @property --p { syntax: '<number>'; inherits: false; initial-value: 0; }
+  :root { --grad: linear-gradient(135deg, #1e4fa3 0%, #2563c9 45%, #12a095 100%); --shadow: 0 8px 24px rgba(16, 42, 92, 0.16); }
+  .hero {
+    position: relative; overflow: hidden; border-radius: 22px; padding: 20px 20px 18px; margin: 4px 0 6px;
+    background: var(--grad); color: #fff; box-shadow: var(--shadow);
+  }
+  .hero::after {
+    content: ""; position: absolute; right: -40px; top: -40px; width: 170px; height: 170px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(255,255,255,.22), rgba(255,255,255,0) 70%);
+  }
+  .hero h1 { color: #fff; margin: 10px 0 6px; font-size: 25px; }
+  .hero-badge {
+    display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px;
+    background: rgba(255,255,255,.18); font-size: 13px; font-weight: 650; letter-spacing: .01em;
+  }
+  .hero-meta { color: rgba(255,255,255,.88); font-size: 14.5px; margin: 0; }
+  .rules { margin: 14px 0 18px; }
+  .rules li {
+    border: 0; margin-bottom: 8px; padding: 12px 14px; border-radius: 14px; background: var(--surface);
+    box-shadow: 0 1px 2px rgba(16, 42, 92, 0.06); align-items: flex-start;
+  }
+  .rules li span:first-child {
+    flex: none; width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px; font-size: 18px;
+    background: color-mix(in srgb, var(--cobalt) 10%, transparent);
+  }
+  .btn { background: var(--grad); box-shadow: 0 6px 18px rgba(30, 79, 163, 0.28); letter-spacing: .01em; }
+  .btn.ghost, .btn.small { box-shadow: none; }
+  .btn.ghost { background: transparent; }
+  #intro .btn#startBtn { position: sticky; bottom: calc(10px + var(--safe-b)); }
+
+  .res-hero {
+    border-radius: 24px; padding: 18px 18px 20px; margin: 4px 0 14px; text-align: center; color: #fff;
+    background: var(--grad); box-shadow: var(--shadow);
+  }
+  .res-hero .res-title { color: rgba(255,255,255,.9); font-size: 14px; margin: 0 0 4px; }
+  .ring {
+    --p: 0; width: 148px; height: 148px; margin: 10px auto 12px; border-radius: 50%; display: grid; place-items: center;
+    background: conic-gradient(#fff calc(var(--p) * 1%), rgba(255,255,255,.22) 0);
+    transition: --p 1s ease;
+  }
+  .ring-in {
+    width: 122px; height: 122px; border-radius: 50%; display: flex; align-items: baseline; justify-content: center;
+    padding-top: 36px; background: #1f56ab;
+  }
+  .ring-in b { font-size: 46px; line-height: 1; letter-spacing: -0.04em; }
+  .ring-in span { font-size: 17px; opacity: .85; margin-left: 2px; }
+  .res-hero .level { background: rgba(255,255,255,.95); color: #1e4fa3; margin: 0 0 8px; padding: 5px 14px; border-radius: 999px; }
+  .res-hero .res-raw { color: rgba(255,255,255,.88); font-size: 13.5px; margin: 0; }
+  .card { background: var(--surface); border-radius: 16px; padding: 14px 16px; margin-bottom: 10px;
+          box-shadow: 0 1px 2px rgba(16, 42, 92, 0.06); }
+  .mistake { background: var(--surface); border: 0; border-radius: 14px; padding: 12px 14px; margin-bottom: 8px;
+             box-shadow: 0 1px 2px rgba(16, 42, 92, 0.06); }
+  .wrong { background: color-mix(in srgb, var(--clay) 10%, transparent); padding: 1px 6px; border-radius: 6px; }
+  .right { background: color-mix(in srgb, var(--turquoise) 12%, transparent); padding: 1px 6px; border-radius: 6px; }
+  .tips { list-style: none; padding: 0; }
+  .tips li { position: relative; padding: 10px 12px 10px 38px; background: var(--surface); border-radius: 12px; margin-bottom: 8px; }
+  .tips li::before { content: "✓"; position: absolute; left: 13px; top: 9px; color: var(--turquoise); font-weight: 800; }
+  h2 { display: flex; align-items: center; gap: 8px; }
 </style>
 </head>
 <body>
@@ -140,8 +200,11 @@
 
   <!-- Kirish -->
   <section id="intro" hidden>
-    <h1 id="examTitle"></h1>
-    <p class="muted" id="examMeta"></p>
+    <div class="hero">
+      <span class="hero-badge" id="heroBadge">🎙 Konuşma</span>
+      <h1 id="examTitle"></h1>
+      <p class="hero-meta" id="examMeta"></p>
+    </div>
     <ul class="rules">
       <li><span>🤫</span><span>Tinch joyda bo'ling va telefonni og'zingizga yaqin tuting.</span></li>
       <li><span>⏳</span><span>Har savoldan oldin tayyorlanish vaqti beriladi, keyin yozuv o'zi boshlanadi.</span></li>
@@ -177,11 +240,13 @@
 
   <!-- Natija -->
   <section id="result" hidden>
-    <p class="muted" id="resTitle" style="margin-top:8px"></p>
-    <div class="score"><b id="resBand"></b><span id="resBandMax"></span></div>
-    <span class="level" id="resLevel"></span>
-    <p id="resReason"></p>
-    <p class="muted" id="resRaw"></p>
+    <div class="res-hero">
+      <p class="res-title" id="resTitle"></p>
+      <div class="ring" id="resRing"><div class="ring-in"><b id="resBand"></b><span id="resBandMax"></span></div></div>
+      <span class="level" id="resLevel"></span>
+      <p class="res-raw" id="resRaw"></p>
+    </div>
+    <p class="card" id="resReason"></p>
     <p id="resSummary"></p>
     <div class="bars" id="resBars"></div>
     <div id="resMistakesWrap"><h2 id="resMistakesTitle">Xatolar</h2><div id="resMistakes"></div></div>
@@ -556,6 +621,9 @@ function showResult(r) {
   $("resBandMax").textContent = ` / ${c.max ?? 5}`;
   $("resLevel").textContent = c.label || r.level;
   $("resReason").textContent = c.reason || "";
+  $("resReason").hidden = !c.reason;
+  const pct = c.max ? Math.round(100 * (Number(c.band) || 0) / c.max) : 0;
+  requestAnimationFrame(() => $("resRing").style.setProperty("--p", pct));
   $("resRaw").textContent = r.total != null ? `Standart ball: ${r.total} / ${r.max_total || 75} (${r.level})` : "Rasmiy mezon bo'yicha ekspert bahosi";
   $("resSummary").textContent = "";
   const notes = c.notes || {};

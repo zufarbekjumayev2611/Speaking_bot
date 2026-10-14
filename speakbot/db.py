@@ -1,5 +1,6 @@
 """SQLite baza: imtihonlar (speaking/writing), savollar, urinishlar, javoblar, writing ishlari."""
 import json
+import re
 import os
 import time
 from datetime import datetime, timedelta, timezone
@@ -122,6 +123,7 @@ _MIGRATIONS = [
     # O'quvchining shaxsiy testi: owner_id - kim yaratgan (NULL - admin testi), expires_at - qachon o'chadi
     "ALTER TABLE exams ADD COLUMN owner_id INTEGER",
     "ALTER TABLE exams ADD COLUMN expires_at TEXT",
+    "ALTER TABLE admins ADD COLUMN perms TEXT",  # adminning ochiq bo'limlari (NULL - hammasi), roles.py
 ]
 
 
@@ -237,6 +239,7 @@ _ALL_OPEN = "UPDATE exams SET is_active = 1 WHERE (is_active IS NULL OR is_activ
 
 
 async def init_db():
+    _touch_catalog("UPDATE exams")  # ishga tushishda testlar o'zgarishi mumkin (migratsiyalar)
     if _turso:
         statements = [s.strip() for s in SCHEMA.split(";") if s.strip()]
         await _turso.batch([(sql, ()) for sql in statements])
@@ -290,7 +293,20 @@ async def _fetchone(sql, params=()):
     return rows[0] if rows else None
 
 
+# Testlar katalogi versiyasi: exams / questions jadvaliga har yozuvda oshadi - bot.py dagi o'quvchi katalogi
+# keshi shu orqali eskirganini biladi (har menyu ochilishida bazaga borilmaydi).
+CATALOG_VERSION = 0
+_CATALOG_TABLES = re.compile(r"\b(exams|questions)\b", re.IGNORECASE)
+
+
+def _touch_catalog(sql: str):
+    global CATALOG_VERSION
+    if not sql.lstrip()[:6].upper().startswith("SELECT") and _CATALOG_TABLES.search(sql):
+        CATALOG_VERSION += 1
+
+
 async def _execute(sql, params=()) -> int:
+    _touch_catalog(sql)
     if _turso:
         return (await _turso.execute(sql, params)).lastrowid
     db = await _get()
@@ -306,6 +322,8 @@ _saved_users: dict[int, tuple] = {}  # oxirgi yozilgan ism/username - o'zgarmaga
 
 async def _execute_many(statements: list[tuple[str, tuple]]):
     """Bir nechta yozuv - Turso'ga BITTA so'rovda (har so'rov ~0.1-0.3 s)."""
+    for sql, _ in statements:
+        _touch_catalog(sql)
     if _turso:
         await _turso.batch(statements)
         return
@@ -435,6 +453,54 @@ async def list_exams():
                   (SELECT q.meta FROM questions q WHERE q.exam_id = e.id ORDER BY q.position, q.id LIMIT 1) AS task_meta
            FROM exams e WHERE e.owner_id IS NULL ORDER BY COALESCE(e.kind, 'speaking'), e.part, e.id DESC"""
     )
+
+
+def like_variants(q: str) -> list[str]:
+    """LIKE uchun naqshlar: SQLite faqat lotin harflarida katta-kichikni farqlamaydi - turkcha/kirill uchun
+    bir necha yozilish shakli qo'shiladi."""
+    q = q.replace("%", "").replace("_", "").strip()
+    forms = dict.fromkeys([q, q.lower(), q.upper(), q.capitalize(), q.title()])
+    return [f"%{f}%" for f in forms if f]
+
+
+async def list_exams_page(offset: int = 0, limit: int = 10, query: str | None = None) -> tuple[list[dict], int]:
+    """Admin testlari: eng yangisi birinchi, faqat bitta sahifa (ko'p test bo'lsa ham baza yuklanmaydi).
+    query - nom bo'yicha qidiruv. (qatorlar, jami soni) qaytadi."""
+    where, params = "e.owner_id IS NULL", []
+    if query:
+        pats = like_variants(query)
+        where += " AND (" + " OR ".join("e.title LIKE ?" for _ in pats) + ")"
+        params += pats
+    total = (await _fetchone(f"SELECT COUNT(*) AS c FROM exams e WHERE {where}", tuple(params)))["c"]
+    rows = await _fetchall(
+        f"""SELECT e.*, (SELECT COUNT(*) FROM questions q WHERE q.exam_id = e.id) AS q_count,
+                   (SELECT q.text FROM questions q WHERE q.exam_id = e.id ORDER BY q.position, q.id LIMIT 1) AS task_text,
+                   (SELECT q.meta FROM questions q WHERE q.exam_id = e.id ORDER BY q.position, q.id LIMIT 1) AS task_meta
+            FROM exams e WHERE {where} ORDER BY e.id DESC LIMIT ? OFFSET ?""",
+        tuple(params) + (limit, offset),
+    )
+    return rows, total
+
+
+async def search_users(query: str, limit: int = 10) -> list[dict]:
+    """ID, @username yoki ism (bir qismi) bo'yicha - ko'pi bilan `limit` ta (butun jadval o'qilmaydi)."""
+    q = (query or "").strip()
+    if q.lstrip("-").isdigit():
+        user = await get_user(int(q))
+        return [user] if user else []
+    for prefix in ("https://t.me/", "http://t.me/", "t.me/"):
+        if q.lower().startswith(prefix):
+            q = q[len(prefix):]
+    q = q.strip().lstrip("@").strip("/")
+    if not q:
+        return []
+    exact = await _fetchall("SELECT * FROM users WHERE LOWER(username) = LOWER(?) LIMIT 1", (q,))
+    if exact:
+        return exact
+    pats = like_variants(q)
+    cond = " OR ".join(["full_name LIKE ?"] * len(pats) + ["username LIKE ?"] * len(pats))
+    return await _fetchall(f"SELECT * FROM users WHERE full_name IS NOT NULL AND ({cond}) "
+                           f"ORDER BY joined_at DESC LIMIT ?", tuple(pats + pats) + (limit,))
 
 
 async def active_part_counts(kind: str) -> dict:
@@ -723,13 +789,21 @@ async def users_for_api(plan: str | None, since: str | None, limit: int, offset:
 
 async def load_admins():
     """Bazadagi adminlarni xotiraga yuklaydi (config.is_admin ularni ko'radi)."""
-    rows = await _fetchall("SELECT telegram_id FROM admins")
+    rows = await _fetchall("SELECT telegram_id, perms FROM admins")
     config.EXTRA_ADMIN_IDS = {r["telegram_id"] for r in rows}
+    config.ADMIN_PERMS = {r["telegram_id"]: {p for p in r["perms"].split(",") if p}
+                          for r in rows if r.get("perms") is not None}
+
+
+async def set_admin_perms(telegram_id: int, perms: str | None):
+    """perms: "tests,users,..." yoki None (hamma bo'lim)."""
+    await _execute("UPDATE admins SET perms = ? WHERE telegram_id = ?", (perms, telegram_id))
+    await load_admins()
 
 
 async def list_admins():
     return await _fetchall(
-        """SELECT a.telegram_id, a.added_at, u.full_name, u.username FROM admins a
+        """SELECT a.telegram_id, a.added_at, a.perms, u.full_name, u.username FROM admins a
            LEFT JOIN users u ON u.telegram_id = a.telegram_id ORDER BY a.added_at"""
     )
 
@@ -757,12 +831,8 @@ async def find_user(query: str):
     q = q.strip().lstrip("@").strip("/")
     if not q:
         return None
-    user = await _fetchone("SELECT * FROM users WHERE LOWER(username) = LOWER(?)", (q,))
-    if not user:  # ism bo'yicha (kirill, turkcha harflar ham) - faqat bitta odam mos kelsa
-        needle = q.casefold()
-        same = [u for u in await _fetchall("SELECT * FROM users WHERE full_name IS NOT NULL")
-                if needle in u["full_name"].casefold()]
-        user = same[0] if len(same) == 1 else None
+    found = await search_users(q, limit=2)  # ism bo'yicha - faqat bitta odam mos kelsa
+    user = found[0] if len(found) == 1 else None
     return {**user, "known": True} if user else None
 
 
@@ -860,6 +930,23 @@ async def count_active_premium(plan: str | None = None) -> int:
     return (await _fetchone(sql, tuple(params)))["c"]
 
 
+async def grants_since(days: int = 30):
+    """Boss hisoboti uchun: so'nggi N kunda berilgan obunalar (kim bergan bilan)."""
+    return await _fetchall(
+        f"""SELECT l.plan, l.days, l.amount, l.granted_by, l.created_at, a.full_name AS admin_name
+            FROM premium_log l LEFT JOIN users a ON a.telegram_id = l.granted_by
+            WHERE l.action = 'grant' AND l.created_at >= datetime('now', '-{int(days)} days')
+            ORDER BY l.id DESC"""
+    )
+
+
+async def count_exams_by_kind() -> dict:
+    """Admin testlari soni: {"speaking": n, "writing": m} (shaxsiy testlarsiz)."""
+    rows = await _fetchall("SELECT COALESCE(kind, 'speaking') AS kind, COUNT(*) AS c FROM exams "
+                           "WHERE owner_id IS NULL GROUP BY 1")
+    return {r["kind"]: r["c"] for r in rows}
+
+
 async def premium_history(telegram_id: int, limit: int = 5):
     return await _fetchall(
         "SELECT action, plan, days, amount, created_at FROM premium_log WHERE telegram_id = ? ORDER BY id DESC LIMIT ?",
@@ -868,14 +955,25 @@ async def premium_history(telegram_id: int, limit: int = 5):
 
 
 async def count_checks(telegram_id: int, kind: str, since: str | None = None) -> int:
-    """Yakunlangan tekshiruvlar soni (kind: speaking | writing). since berilsa (UTC "YYYY-MM-DD HH:MM:SS") -
-    shu vaqtdan beri, aks holda shu kalendar oyda (O'zbekiston vaqti, UTC+5)."""
+    """Sarflangan limit (kind: speaking | writing): yakunlangan tekshiruvlar + o'zi yaratgan shaxsiy testlar.
+    O'zi yaratgan testdagi tekshiruvlar SANALMAYDI (test yaratilganda bir marta limit olingan).
+    since berilsa (UTC "YYYY-MM-DD HH:MM:SS") - shu vaqtdan beri, aks holda shu kalendar oyda (UTC+5)."""
     table = "attempts" if kind == "speaking" else "writing_submissions"
-    if since:
-        cond, params = "created_at >= ?", (telegram_id, since)
-    else:
-        cond, params = "strftime('%Y-%m', created_at, '+5 hours') = strftime('%Y-%m', 'now', '+5 hours')", (telegram_id,)
-    row = await _fetchone(f"SELECT COUNT(*) AS c FROM {table} WHERE telegram_id = ? AND status = 'done' AND {cond}", params)
+
+    def period(col: str) -> str:
+        return (f"{col} >= ?" if since else
+                f"strftime('%Y-%m', {col}, '+5 hours') = strftime('%Y-%m', 'now', '+5 hours')")
+
+    extra = (since,) if since else ()
+    row = await _fetchone(
+        f"""SELECT
+              (SELECT COUNT(*) FROM {table} t LEFT JOIN exams e ON e.id = t.exam_id
+                WHERE t.telegram_id = ? AND t.status = 'done'
+                  AND (e.owner_id IS NULL OR e.owner_id != t.telegram_id) AND {period('t.created_at')})
+            + (SELECT COUNT(*) FROM exams x
+                WHERE x.owner_id = ? AND COALESCE(x.kind, 'speaking') = ? AND {period('x.created_at')}) AS c""",
+        (telegram_id, *extra, telegram_id, kind, *extra),
+    )
     return row["c"]
 
 

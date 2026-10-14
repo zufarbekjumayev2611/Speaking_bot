@@ -46,6 +46,16 @@ Parametrlar: `plan` (`free` / `standard` / `pro`), `since` (`YYYY-MM-DD` — shu
 "plan_until", "speaking_count", "writing_count", "last_activity", "blocked"}]}` (vaqtlar UTC, ISO 8601).
 Kalitni almashtirish uchun Render'da `USERS_API_KEY` ni o'zgartirib, qayta deploy qiling.
 
+## 👑 Boss va adminlar
+
+- **Boss** — Render'dagi `ADMIN_IDS`: hamma huquq + «👑 Boss paneli» (30 kunlik tushum va kim nechta obuna bergani,
+  adminlar va ularning huquqlari, tarif/narx sozlamalari, tizim holati).
+- **Admin** — botda qo'shilganlar. Boss har bir admin uchun bo'limlarni yoqadi/yopadi: Testlar, Foydalanuvchilar,
+  Premium, Natijalar, Xabar yuborish, Statistika. Yopiq bo'lim tugmalari adminga ko'rinmaydi, eski tugma bosilsa
+  ham markaziy filtr (`roles.py`) to'xtatadi.
+- Testlar va foydalanuvchilar ro'yxati 10 tadan chiqadi (qolgani — sahifalab yoki 🔎 qidiruv); o'quvchi qism
+  ro'yxati ham 10 tadan + «🎲 Tasodifiy test», katalog xotirada keshlanadi (yuzlab test bo'lsa ham yengil).
+
 ## Lokal ishga tushirish
 
 `speakbot/.env.example` dan `.env` yarating va `speakbot/run_local.sh` ni ishga tushiring (cloudflared kerak).
@@ -57,11 +67,12 @@ Kalitni almashtirish uchun Render'da `USERS_API_KEY` ni o'zgartirib, qayta deplo
 | Tarif | Konuşma | Yazma | Narx | Qo'shimcha |
 |---|---|---|---|---|
 | 🆓 Bepul | oyiga 2 | oyiga 2 | — | — |
-| ⭐ Standard | 30 | 30 | 30 000 so'm / 30 kun | o'z testini yaratish |
-| 💎 Pro | 60 | 60 | 50 000 so'm / 30 kun | 2 ekspert baholashi, o'z testini yaratish |
-| 👑 VIP | 100 | 100 | 70 000 so'm / 30 kun | 2 ekspert baholashi, o'z testini yaratish |
+| ⭐ Standard | 30 | 30 | 30 000 so'm / 30 kun | — |
+| 💎 Pro | 60 | 60 | 50 000 so'm / 30 kun | 2 ekspert baholashi |
+| 👑 VIP | 100 | 100 | 70 000 so'm / 30 kun | 2 ekspert baholashi |
 
-Bepul limit kalendar oyda (O'zbekiston vaqti, 1-sanada) yangilanadi; pullik limit — obunaning har 30 kunlik
+Limit = kredit: **test topshirish** yoki **o'z testini yaratish** — 1 limit; o'zi yaratgan testni o'quvchi
+**cheksiz** topshiradi (shaxsiy test 2 soat turadi, bir vaqtda ko'pi bilan 3 ta). Bepul limit kalendar oyda (O'zbekiston vaqti, 1-sanada) yangilanadi; pullik limit — obunaning har 30 kunlik
 davrida (60 kunga berilsa — ikki davr). Limit va narxlar admin paneldagi **⚙️ Sozlamalar** orqali o'zgartiriladi.
 `PREMIUM_ENABLED=0` bo'lsa hamma cheksiz.
 
