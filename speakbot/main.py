@@ -23,6 +23,7 @@ from broadcast import reminder_loop, router as broadcast_router
 from premium import BlockMiddleware, router as premium_router
 from config import BOT_MODE, BOT_TOKEN, PORT, WEBAPP_URL
 import mock_seed
+from payments import router as payments_router
 from fsm_storage import DbStorage
 from netclient import close_session, get_session
 from web import create_app
@@ -34,6 +35,7 @@ def build_dispatcher(bot: Bot) -> Dispatcher:
     # Holat bazada saqlanadi (qayta ishga tushganda tugmalar ishlashda davom etadi);
     # bitta foydalanuvchining xabarlari navbat bilan ishlanadi (tez ikki marta bosish chalkashtirmaydi).
     dp = Dispatcher(storage=DbStorage(), events_isolation=SimpleEventIsolation())
+    dp.include_router(payments_router)  # chek kutilayotganda rasm boshqa joyga ketmasin
     dp.include_router(router)
     dp.include_router(premium_router)
     dp.include_router(broadcast_router)

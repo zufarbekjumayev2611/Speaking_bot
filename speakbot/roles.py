@@ -17,12 +17,12 @@ SECTIONS: dict[str, tuple[str, tuple[str, ...]]] = {
         "wtask:", "wtf:", "wph:", "wphx:", "wprev:",
     )),
     "users": ("👥 Foydalanuvchilar", ("adm_users:", "usr:", "usr_bl:", "usr_search")),
-    "premium": ("💎 Premium", ("adm_prem", "pg_start", "pgp:", "pgd:", "pgu:", "pr_start", "prv:", "usr_rv:")),
+    "premium": ("💎 Premium", ("adm_prem", "pg_start", "pgp:", "pgd:", "pgu:", "pr_start", "prv:", "usr_rv:", "pay_ok:", "pay_no:")),
     "results": ("📊 Natijalar", ("results:", "rpdf:")),
     "broadcast": ("📣 Xabar yuborish", ("adm_bc", "bc_")),
     "stats": ("📈 Statistika", ("adm_stats",)),
 }
-BOSS_ONLY = ("boss", "adm_admins", "ad_add", "adr:", "adrd:", "adm_settings", "lim:", "pi_edit", "prm:")
+BOSS_ONLY = ("boss", "adm_admins", "ad_add", "adr:", "adrd:", "adm_settings", "lim:", "pi_edit", "prm:", "card_edit")
 
 
 def perms_of(user_id: int) -> set[str]:

@@ -88,6 +88,12 @@ uning Full mock'i, alohida qismlari va qayta ishlash bepul. Bepul limit kalendar
 davrida (60 kunga berilsa — ikki davr). Limit va narxlar admin paneldagi **⚙️ Sozlamalar** orqali o'zgartiriladi.
 `PREMIUM_ENABLED=0` bo'lsa hamma cheksiz.
 
+**To'lovni tasdiqlash (chek):** o'quvchi «🚀 Tarifni yaxshilash» da karta raqamini ko'radi, pul o'tkazadi,
+«✅ To'lovni tasdiqlash» (yoki `/tolov`) → tarifni tanlaydi → chek rasmini yuboradi. Chek «💎 Premium» huquqi bor
+adminlarga keladi; admin summaga mos tarif tugmasini (Standard / Pro / VIP) bosadi — obuna 30 kunga avtomatik
+beriladi va o'quvchiga xabar boradi («❌ Rad etish» ham bor). Karta raqami: Boss → ⚙️ Sozlamalar → «💳 Karta raqami»
+(yoki Render'da `CARD_NUMBER`). Admin username: `ADMIN_CONTACT` (standart `@muhammad_hocam`).
+
 **To'lov qo'lda:** 👥 Foydalanuvchilar → foydalanuvchini tanlang (yoki 💎 Premium → ➕ Premium berish) → tarif (Standard/Pro/VIP) → muddat (30/90/180/365 yoki istalgan kun) → to'lov izohi. Foydalanuvchiga xabar boradi; faol obunaga qayta berilsa, muddat uzayadi. Tugashiga 3 kun qolganda bot foydalanuvchiga o'zi eslatadi.
 
 **Admin panel:**

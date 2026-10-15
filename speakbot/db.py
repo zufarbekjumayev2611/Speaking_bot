@@ -26,6 +26,18 @@ CREATE TABLE IF NOT EXISTS mocks (
     title TEXT NOT NULL,
     created_at TEXT DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL,
+    plan TEXT,
+    file_id TEXT,
+    file_type TEXT,
+    status TEXT DEFAULT 'pending',
+    decided_by INTEGER,
+    decided_plan TEXT,
+    decided_at TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
 CREATE TABLE IF NOT EXISTS questions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     exam_id INTEGER NOT NULL,
@@ -1052,6 +1064,28 @@ async def count_exams_by_kind() -> dict:
     rows = await _fetchall("SELECT COALESCE(kind, 'speaking') AS kind, COUNT(*) AS c FROM exams "
                            "WHERE owner_id IS NULL AND mock_id IS NULL GROUP BY 1")
     return {r["kind"]: r["c"] for r in rows}
+
+
+# ---------- To'lov cheklari (o'quvchi yuboradi, admin tasdiqlaydi) ----------
+
+async def create_payment(telegram_id: int, plan: str, file_id: str, file_type: str) -> int:
+    return await _execute("INSERT INTO payments (telegram_id, plan, file_id, file_type) VALUES (?, ?, ?, ?)",
+                          (telegram_id, plan, file_id, file_type))
+
+
+async def get_payment(payment_id: int):
+    return await _fetchone("SELECT * FROM payments WHERE id = ?", (payment_id,))
+
+
+async def pending_payment(telegram_id: int):
+    """Hali ko'rib chiqilmagan (oxirgi 3 kundagi) chek."""
+    return await _fetchone("SELECT * FROM payments WHERE telegram_id = ? AND status = 'pending' "
+                           "AND created_at > datetime('now', '-3 days') ORDER BY id DESC LIMIT 1", (telegram_id,))
+
+
+async def decide_payment(payment_id: int, status: str, admin_id: int, plan: str | None = None):
+    await _execute("UPDATE payments SET status = ?, decided_by = ?, decided_plan = ?, decided_at = datetime('now') "
+                   "WHERE id = ? AND status = 'pending'", (status, admin_id, plan, payment_id))
 
 
 async def premium_history(telegram_id: int, limit: int = 5):
