@@ -2,6 +2,7 @@
 
 /          - Konuşma (speaking) imtihoni: savollar, ovoz yozish, baholash
 /writing   - Yazma (writing) imtihon rejimi: taymer, so'z hisoblagich, turkcha harflar, baholash"""
+import asyncio
 import hashlib
 import hmac
 import json
@@ -21,7 +22,7 @@ import html
 
 import plans
 import writing
-from access import acquire_check, check_access, get_plan, is_own, release_check
+from access import check_access, get_plan, release_check, reserve
 import config
 from config import BOT_TOKEN, EXAM_LANGUAGE
 from languages import LANGUAGES
@@ -216,18 +217,16 @@ async def finish_exam(request: web.Request):
             return _error(400, "Ovozingiz eshitilmadi — mikrofon ishlamayotgan bo'lishi mumkin. Mikrofonni tekshirib, "
                                "imtihonni qaytadan boshlang. Bu urinish limitga kirmadi.")
         exam = await db.get_exam(attempt["exam_id"])
-        own = is_own(exam, user["id"])  # o'z testi - limitsiz
-        # Imtihon davomida limit tugagan bo'lishi mumkin (masalan, bir vaqtda bir nechta imtihon ochilgan)
-        if not own:
-            allowed, reason = await acquire_check(user["id"], "speaking")
-            if not allowed:
-                return _error(403, reason)
+        # Imtihon davomida limit tugagan bo'lishi mumkin; shu davrda ochilgan mock qismi - limitsiz
+        allowed, reason, held = await reserve(user["id"], "speaking", exam)
+        if not allowed:
+            return _error(403, reason)
         try:
             part = exam.get("part") if exam else None
             result = await grader.grade_speaking(answers, part, plans.raters_for(await get_plan(user["id"])))
             await db.finish_attempt(attempt_id, result["total"], result["level"], result, result["raw"])
         finally:
-            if not own:
+            if held:
                 release_check(user["id"], "speaking")
     except Exception as e:
         log.exception("Baholash xatosi (attempt %s)", attempt_id)
@@ -254,9 +253,141 @@ async def finish_exam(request: web.Request):
     return web.json_response(result)
 
 
+# ---------- Full mock (Konuşma): Part 1.1 -> 1.2 -> 2 -> 3 ketma-ket ----------
+
+PART_ORDER = {p: i for i, p in enumerate(db.MOCK_SPEAKING_PARTS)}
+
+
+async def _mock_parts(mock_id: int) -> list[dict]:
+    """Mockning savoli bor Konuşma qismlari, rasmiy tartibda."""
+    exams = [ex for ex in await db.mock_exams(mock_id)
+             if (ex.get("kind") or "speaking") == "speaking" and ex.get("q_count") and ex.get("is_active")]
+    return sorted(exams, key=lambda ex: PART_ORDER.get(ex.get("part"), 99))
+
+
+async def start_mock(request: web.Request):
+    user = _user_or_401(request)
+    mock = await db.get_mock(int(request.match_info["mock_id"]))
+    parts = await _mock_parts(mock["id"]) if mock else []
+    if not parts:
+        return _error(404, "Bu mock hozir yopiq.")
+    await db.save_user(user["id"], _full_name(user), user.get("username"))
+    allowed, reason = await check_access(user["id"], "speaking", exam=parts[0])
+    if not allowed:
+        return _error(403, reason)
+    items, attempts = [], []
+    for ex in parts:
+        attempt_id = await db.reusable_attempt(user["id"], ex["id"]) or await db.create_attempt(user["id"], ex["id"])
+        attempts.append(attempt_id)
+        info = part_info("speaking", ex.get("part"))
+        photo = None
+        for q in await db.get_questions(ex["id"]):
+            photo = _photo_url(q) or (photo if info.get("carry_photo") else None)
+            items.append({"id": q["id"], "text": q["text"], "photo": photo, "prep_sec": q["prep_sec"],
+                          "answer_sec": q["answer_sec"], "attempt_id": attempt_id,
+                          "part": ex.get("part"), "part_name": info["name"].split(" — ")[0]})
+    return web.json_response({
+        "mock_id": mock["id"],
+        "attempt_ids": attempts,
+        "title": mock["title"],
+        "part_name": "Full mock — " + " → ".join(f"Part {ex.get('part')}" for ex in parts),
+        "flag": LANG["flag"],
+        "section_name": LANG["speaking_name"],
+        "answer_rule": LANG["answer_rule"],
+        "questions": items,
+    })
+
+
+async def finish_mock(request: web.Request):
+    """Full mock yakuni: har qism o'z mezoni bilan baholanadi (baholangani qayta baholanmaydi), natija
+    bitta umumiy natijaga yig'iladi. Limit - mock uchun bir marta."""
+    user = _user_or_401(request)
+    try:
+        body = await request.json()
+        mock_id = int(body.get("mock_id", 0))
+        attempt_ids = [int(a) for a in body.get("attempt_ids") or []][:8]
+    except (ValueError, TypeError, AttributeError):
+        return _error(400, "So'rov noto'g'ri.")
+    mock = await db.get_mock(mock_id)
+    if not mock or not attempt_ids:
+        return _error(404, "Mock topilmadi.")
+    rows = []
+    for aid in attempt_ids:
+        attempt = await _own_attempt(user, aid)
+        exam = await db.get_exam(attempt["exam_id"]) if attempt else None
+        if not attempt or not exam or exam.get("mock_id") != mock_id:
+            return _error(403, "Urinish topilmadi.")
+        rows.append((attempt, exam))
+    rows.sort(key=lambda r: PART_ORDER.get(r[1].get("part"), 99))
+    if any(a["id"] in _grading for a, _ in rows):
+        return _error(409, "Javoblaringiz hozir baholanmoqda — bir oz kutib, «Qayta urinish»ni bosing.")
+
+    bot: Bot = request.app["bot"]
+    ids = [a["id"] for a, _ in rows]
+    _grading.update(ids)
+    held = False
+    try:
+        todo, results = [], {}
+        for attempt, exam in rows:
+            attempt = await db.get_attempt(attempt["id"])
+            if attempt["status"] == "done":
+                results[attempt["id"]] = json.loads(attempt["result_json"])
+                continue
+            answers = await db.get_answers(attempt["id"])
+            if answers:
+                todo.append((attempt, exam, answers))
+        heard = any((a.get("transcript") or "").strip() for _, _, ans in todo for a in ans)
+        if todo and not heard and not results:
+            return _error(400, "Ovozingiz eshitilmadi — mikrofon ishlamayotgan bo'lishi mumkin. Mikrofonni tekshirib, "
+                               "mockni qaytadan boshlang. Bu urinish limitga kirmadi.")
+        if todo:
+            allowed, reason, held = await reserve(user["id"], "speaking", rows[0][1])
+            if not allowed:
+                return _error(403, reason)
+            raters = plans.raters_for(await get_plan(user["id"]))
+
+            async def grade(attempt, exam, answers):
+                result = await grader.grade_speaking(answers, exam.get("part"), raters)
+                await db.finish_attempt(attempt["id"], result["total"], result["level"], result, result["raw"])
+                results[attempt["id"]] = result
+
+            outcome = await asyncio.gather(*[grade(*t) for t in todo], return_exceptions=True)
+            errors = [o for o in outcome if isinstance(o, BaseException)]
+            if errors:
+                raise errors[0]
+        if not results:
+            return _error(400, "Hech bir javob yozib olinmadi.")
+        combined = grader.combine_mock([results[a["id"]] for a, _ in rows if a["id"] in results])
+    except Exception as e:
+        log.exception("Full mock baholash xatosi (mock %s)", mock_id)
+        if getattr(e, "status", None) == 429:
+            return _error(503, "Hozir baholash navbati band. Javoblaringiz saqlandi - "
+                               "1-2 daqiqadan keyin «Qayta urinish»ni bosing.")
+        await grader.report_key_problem(bot, e)
+        return _error(503, "Baholashda xatolik bo'ldi. Javoblaringiz saqlandi — bir daqiqadan keyin «Qayta urinish»ni bosing.")
+    finally:
+        _grading.difference_update(ids)
+        if held:
+            release_check(user["id"], "speaking")
+
+    if todo:  # birinchi marta yakunlandi - xabar yuboriladi (qayta so'rovda takrorlanmaydi)
+        try:
+            await grader.send_long(bot, user["id"], grader.result_message(mock["title"], combined["part_name"], combined))
+        except Exception:
+            log.exception("Full mock natijasini o'quvchiga yuborib bo'lmadi")
+        name = html.escape(user.get("first_name", "?"))
+        await grader.notify_admins(
+            bot,
+            f"📥 🎙 {name} (<code>{user['id']}</code>) — {html.escape(mock['title'])} (Full mock): "
+            f"<b>{combined['total']}/75</b> ({html.escape(combined['level'])})",
+        )
+    return web.json_response(combined)
+
+
 # ---------- Yazma (writing) - imtihon rejimi ----------
 
-async def _writing_exam(exam_id: int, user_id: int, resume: bool = False) -> tuple[dict | None, dict | None, dict]:
+async def _writing_exam(exam_id: int, user_id: int, resume: bool = False,
+                        mode: str | None = None) -> tuple[dict | None, dict | None, dict]:
     """(mavzu, topshiriq qatori, maydonlar) - mavzu ochiq va topshirig'i to'liq bo'lsagina.
     resume=True: o'quvchi saqlangan qoralamasini davom ettiryapti - mavzu yopilgan bo'lsa ham ochiladi."""
     exam = await db.get_exam(exam_id)
@@ -267,22 +398,30 @@ async def _writing_exam(exam_id: int, user_id: int, resume: bool = False) -> tup
     if not resume and not db.exam_open_for(exam, user_id):
         return None, None, {}
     row = await db.get_writing_task(exam_id)
+    part = writing_mode(exam, mode)
     values = writing.task_values(exam.get("part"), row)
-    if not row or writing.missing_fields(exam.get("part"), values):
+    if not row or writing.missing_fields(part, values):
         return None, None, {}
     return exam, row, values
 
 
+def writing_mode(exam: dict, mode) -> str | None:
+    """Mockdagi to'liq yazmadan faqat bitta qismni ishlash: mode "1" / "2" (aks holda - testning o'z turi)."""
+    mode = str(mode or "")
+    return mode if exam.get("part") == "full" and mode in ("1", "2") else exam.get("part")
+
+
 async def start_writing(request: web.Request):
     user = _user_or_401(request)
-    exam, row, values = await _writing_exam(int(request.match_info["exam_id"]), user["id"], request.query.get("resume") == "1")
+    exam, row, values = await _writing_exam(int(request.match_info["exam_id"]), user["id"],
+                                            request.query.get("resume") == "1", request.query.get("mode"))
     if not exam:
         return _error(404, "Bu mavzu hozir yopiq.")
     await db.save_user(user["id"], _full_name(user), user.get("username"))
     allowed, reason = await check_access(user["id"], "writing", exam=exam)
     if not allowed:
         return _error(403, reason)
-    part = exam.get("part")
+    part = writing_mode(exam, request.query.get("mode"))
     info = part_info("writing", part)
     return web.json_response(
         {
@@ -315,6 +454,7 @@ async def submit_writing(request: web.Request):
     exam = await db.get_exam(exam_id)
     if not exam or exam.get("kind") != "writing" or exam.get("owner_id") not in (None, user["id"]):
         return _error(404, "Mavzu topilmadi.")
+    exam = {**exam, "part": writing_mode(exam, body.get("mode"))}
     bot: Bot = request.app["bot"]
     texts = {str(k): str(v or "") for k, v in texts.items()}
     try:
@@ -399,6 +539,8 @@ def create_app(bot: Bot) -> web.Application:
     app.router.add_get(r"/api/photo/{question_id:\d+}", question_photo)
     app.router.add_post("/api/answer", upload_answer)
     app.router.add_post("/api/finish", finish_exam)
+    app.router.add_get(r"/api/mock/{mock_id:\d+}", start_mock)
+    app.router.add_post("/api/mock_finish", finish_mock)
     app.router.add_get(r"/api/wexam/{exam_id:\d+}", start_writing)
     app.router.add_post("/api/wsubmit", submit_writing)
     return app

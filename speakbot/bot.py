@@ -11,9 +11,7 @@ import asyncio
 import html
 import json
 import logging
-import random
 import time
-from datetime import datetime, timezone
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
@@ -39,7 +37,7 @@ import writing
 from access import check_access, get_plan, usage_block, usage_text
 from config import EXAM_LANGUAGE, WEBAPP_URL, is_admin, is_owner
 from languages import LANGUAGES
-from parts import part_info, parts_for, speaking_times
+from parts import WRITING_PARTS, part_info, parts_for, speaking_times
 import plans
 from premium import BTN_PREMIUM, OLD_PREMIUM_BUTTONS, premium_info
 
@@ -52,6 +50,8 @@ router.message.filter(F.chat.type == "private")
 SPEAKING_NAME = LANG["speaking_name"]   # turkcha: "Konuşma"
 WRITING_NAME = LANG["writing_name"]     # turkcha: "Yazma"
 
+BTN_MOCKS = "📚 Mocklar"
+# eski klaviaturadagi «Konuşma» / «Yazma» tugmalari ham mocklar ro'yxatini ochadi
 BTN_SPEAKING = f"🎙 {SPEAKING_NAME}"
 BTN_WRITING = f"✍️ {WRITING_NAME}"
 BTN_ADMIN = "⚙️ Admin panel"
@@ -108,7 +108,7 @@ def _part_from_key(key: str) -> str | None:
 
 
 def main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
-    rows = [[KeyboardButton(text=BTN_SPEAKING), KeyboardButton(text=BTN_WRITING)]]
+    rows = [[KeyboardButton(text=BTN_MOCKS)]]
     if config.SHOW_MY_RESULTS:
         rows += [[KeyboardButton(text=BTN_PROFILE), KeyboardButton(text=BTN_RESULTS)], [KeyboardButton(text=BTN_PREMIUM)]]
     else:
@@ -132,12 +132,12 @@ async def cmd_start(message: Message, state: FSMContext):
         f"Men — {LANG['name_uz']} bo'yicha <b>multilevel imtihon murabbiyingiz</b>. Javoblaringizni sun'iy intellekt "
         "Bilimni baholash agentligining <b>rasmiy mezonlari</b> bo'yicha baholaydi.\n"
         "━━━━━━━━━━━━━━━━\n"
-        f"🎙 <b>{SPEAKING_NAME}</b> — real imtihondagidek: savol, tayyorlanish, «tink» va gapirish\n"
-        f"✍️ <b>{WRITING_NAME}</b> — xat va insho; taymer va so'zlar hisoblagichi bilan\n"
+        "📚 <b>Mocklar</b> — to'liq imtihon variantlari: har birida 🎙 "
+        f"<b>{SPEAKING_NAME}</b> (Part 1.1 → 3) va ✍️ <b>{WRITING_NAME}</b> (1 va 2-qism)\n"
+        "🔥 <b>Full mock</b> — hammasi ketma-ket, yoki istalgan qismni alohida ishlang\n"
         "🏅 <b>Natija</b> — ball, daraja (A2–C1) va 10 tagacha xato tahlili\n"
-        "🧪 <b>O'z testingiz</b> — savollarni o'zingiz yozib, mashq qiling\n"
         "━━━━━━━━━━━━━━━━\n"
-        f"Boshlash uchun pastdan bo'limni tanlang 👇{admin}",
+        f"Boshlash uchun pastdagi «{BTN_MOCKS}» tugmasini bosing 👇{admin}",
         parse_mode="HTML",
         reply_markup=main_keyboard(message.from_user.id),
     )
@@ -168,8 +168,8 @@ async def _my_results_view(user_id: int, page: int):
     has_next = len(rows) > MY_PER_PAGE
     rows = rows[:MY_PER_PAGE]
     if not rows and page == 0:
-        return ("📊 <b>Natijalarim</b>\n\nHali natijangiz yo'q. «🎙 Konuşma» yoki «✍️ Yazma» bo'limidan test "
-                "topshiring — natija shu yerda saqlanadi."), None
+        return ("📊 <b>Natijalarim</b>\n\nHali natijangiz yo'q. «📚 Mocklar» bo'limidan mock ishlang — natija shu "
+                "yerda saqlanadi."), None
     counts = await db.my_result_counts(user_id)
     lines = ["📊 <b>Natijalarim</b>",
              f"Jami: {KIND_ICON['speaking']} {SPEAKING_NAME} — <b>{counts.get('speaking', 0)}</b> ta • "
@@ -288,169 +288,225 @@ async def unknown_command(message: Message):
     await message.answer("Bunday buyruq yo'q. Joriy amalni bekor qilish: /cancel, bosh menyu: /start")
 
 
-_catalog_cache: dict[str, tuple[int, float, dict]] = {}
+_mock_cache: tuple[int, float, list] | None = None
 CATALOG_TTL = 60  # soniya: zaxira (bir nechta server nusxasi bo'lsa ham eskirgan ro'yxat uzoq qolmasin)
+MOCK_PAGE = 10
+SP_PARTS = ("1.1", "1.2", "2", "3")
 
 
-async def _student_catalog(kind: str) -> dict:
-    """O'quvchiga ko'rinadigan testlar tur bo'yicha: {qism: [test, ...]} (eng yangisi birinchi). Faqat ochiq, savoli
-    bor va (yazmada) topshirig'i to'liq bo'lganlari. Noma'lum / eski qism qiymatlari «Boshqa» (None) ga tushadi.
-    Xotirada keshlanadi: testlar o'zgarmaguncha (db.CATALOG_VERSION) bazaga qayta borilmaydi - ko'p o'quvchi
-    bir vaqtda menyuni ochsa ham baza yuklanmaydi."""
-    cached = _catalog_cache.get(kind)
-    if cached and cached[0] == db.CATALOG_VERSION and time.time() - cached[1] < CATALOG_TTL:
-        return cached[2]
+def _ready(ex: dict) -> bool:
+    """O'quvchiga ochiq: konuşmada kamida bitta savol, yazmada topshiriq to'liq."""
+    if (ex.get("kind") or "speaking") == "writing":
+        values = writing.task_values(ex.get("part"), {"text": ex.get("task_text"), "meta": ex.get("task_meta")})
+        return ex.get("task_text") is not None and not writing.missing_fields(ex.get("part"), values)
+    return bool(ex.get("q_count"))
+
+
+async def _mock_catalog() -> list[dict]:
+    """O'quvchiga ko'rinadigan mocklar (kamida bitta qismi tayyor): [{id, number, title, speaking: {part: exam_id},
+    writing: exam | None}]. Xotirada keshlanadi - testlar o'zgarmaguncha (db.CATALOG_VERSION) bazaga borilmaydi:
+    ko'p o'quvchi bir vaqtda ochsa ham, yuzlab mock bo'lsa ham baza yuklanmaydi."""
+    global _mock_cache
+    if _mock_cache and _mock_cache[0] == db.CATALOG_VERSION and time.time() - _mock_cache[1] < CATALOG_TTL:
+        return _mock_cache[2]
     version = db.CATALOG_VERSION
-    known = parts_for(kind)
-    catalog: dict = {}
-    for ex in await db.active_exams_with_task(kind):
-        if kind == "writing":
-            values = writing.task_values(ex.get("part"), {"text": ex.get("task_text"), "meta": ex.get("task_meta")})
-            if writing.missing_fields(ex.get("part"), values):
-                continue
-        slim = {k: ex[k] for k in ("id", "title", "part", "kind")}  # keshda katta matnlar saqlanmaydi
-        catalog.setdefault(ex["part"] if ex.get("part") in known else None, []).append(slim)
-    for items in catalog.values():
-        items.sort(key=lambda x: -x["id"])
-    _catalog_cache[kind] = (version, time.time(), catalog)
+    mocks: dict[int, dict] = {}
+    for r in await db.all_mocks_with_exams():
+        m = mocks.setdefault(r["mock_id"], {"id": r["mock_id"], "number": r["number"], "title": r["mock_title"],
+                                            "speaking": {}, "writing": None})
+        if r.get("id") is None or not _ready(r):
+            continue
+        if r.get("kind") == "writing":
+            m["writing"] = {"id": r["id"], "part": r["part"]}
+        elif r.get("part") in SP_PARTS:
+            m["speaking"].setdefault(r["part"], r["id"])
+    catalog = [m for m in mocks.values() if m["speaking"] or m["writing"]]
+    _mock_cache = (version, time.time(), catalog)
     return catalog
 
 
-async def _parts_keyboard(kind: str, user_id: int | None = None) -> tuple[InlineKeyboardMarkup, bool]:
-    """(klaviatura, admin testlari bormi). Pastida o'quvchining shaxsiy testlari va «O'z testimni yaratish»."""
-    catalog = await _student_catalog(kind)
-    prefix = "sp" if kind == "speaking" else "wr"
-    rows = []
-    for key, info in parts_for(kind).items():
-        if catalog.get(key):
-            rows.append([InlineKeyboardButton(text=f"{info['name']} · {len(catalog[key])} ta", callback_data=f"{prefix}:{key}")])
-    if catalog.get(None):
-        rows.append([InlineKeyboardButton(text=f"Boshqa · {len(catalog[None])} ta", callback_data=f"{prefix}:x")])
-    has_tests = bool(rows)
-    if user_id is not None:
-        for ex in await db.my_personal_exams(user_id, kind):
-            left = max(1, ex.get("minutes_left") or 1)
-            rows.append([InlineKeyboardButton(text=f"🧪 {ex['title']} • {left} daq", callback_data=f"my_open:{ex['id']}")])
-        rows.append([InlineKeyboardButton(text="🧪 O'z testimni yaratish", callback_data=f"my_new:{kind}")])
-    return InlineKeyboardMarkup(inline_keyboard=rows), has_tests
+async def _find_mock(mock_id: int) -> dict | None:
+    return next((m for m in await _mock_catalog() if m["id"] == mock_id), None)
 
 
-async def _show_parts(target: Message, kind: str, edit: bool = False, user_id: int | None = None):
-    kb, has_tests = await _parts_keyboard(kind, user_id)
-    about = ("Imtihon 4 qismdan iborat: <b>1.1 → 1.2 → 2 → 3</b>. Har qismni alohida mashq qiling."
-             if kind == "speaking" else
-             "<b>1-qism</b> — ikki xat • <b>2-qism</b> — blog/maqola • <b>To'liq</b> — 60 daqiqalik imtihon.")
-    head = f"{KIND_ICON[kind]} <b>{KIND_NAME[kind]}</b>\n━━━━━━━━━━━━━━━━\n{about}\n\n"
-    if not has_tests:
-        text = head + "Hozircha tayyor testlar yo'q — keyinroq qarang yoki o'zingiz test yarating 👇"
-    else:
-        text = head + "Qaysi qismni tanlaysiz? 👇"
+def _mock_badges(m: dict) -> str:
+    return ("🎙" if m["speaking"] else "") + ("✍️" if m["writing"] else "")
+
+
+async def _mocks_view(user_id: int, page: int = 0):
+    """📚 Mocklar: 10 tadan sahifa (yuzlab mock bo'lsa ham ekran yengil), ✅ - o'quvchi ishlaganlari."""
+    mocks = await _mock_catalog()
+    pages = max(1, -(-len(mocks) // MOCK_PAGE))
+    page = min(max(page, 0), pages - 1)
+    chunk = mocks[page * MOCK_PAGE:(page + 1) * MOCK_PAGE]
+    done = await db.mocks_done(user_id) if chunk else set()
+    lines = [
+        "📚 <b>Mocklar</b>",
+        "━━━━━━━━━━━━━━━━",
+        f"Har bir mock — haqiqiy imtihon: 🎙 <b>{SPEAKING_NAME}</b> (Part 1.1 → 1.2 → 2 → 3) va "
+        f"✍️ <b>{WRITING_NAME}</b> (1 va 2-qism).",
+        "🔥 <b>Full mock</b> — hammasi ketma-ket; vaqtingiz kam bo'lsa — istalgan qismni alohida ishlang.",
+    ]
+    if config.PREMIUM_ENABLED and not is_admin(user_id):
+        lines.append(f"\n💼 {await usage_text(user_id)}\n<i>Mockni ochsangiz, limitdan 1 ta olinadi — uning qismlarini "
+                     "shu davrda qayta-qayta ishlashingiz mumkin.</i>")
+    if not mocks:
+        lines.append("\nHozircha tayyor mock yo'q — tez orada qo'shiladi.")
+        return "\n".join(lines), None
+    lines.append(f"\n📋 Jami <b>{len(mocks)}</b> ta mock. ✅ — siz ishlaganlar. Tanlang 👇")
+    B = InlineKeyboardButton
+    buttons = [B(text=f"{'✅ ' if m['id'] in done else ''}{m['title']} {_mock_badges(m)}"[:40],
+                 callback_data=f"mko:{m['id']}") for m in chunk]
+    rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+    if pages > 1:
+        nav = [B(text="◀️", callback_data=f"mk:{page - 1}")] if page > 0 else []
+        nav.append(B(text=f"{page + 1} / {pages}", callback_data=f"mk:{page}"))
+        if page < pages - 1:
+            nav.append(B(text="▶️", callback_data=f"mk:{page + 1}"))
+        rows.append(nav)
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _show_mocks(target: Message, user_id: int, page: int = 0, edit: bool = False):
+    text, kb = await _mocks_view(user_id, page)
     if edit:
-        await target.edit_text(text, parse_mode="HTML", reply_markup=kb)
-    else:
-        await target.answer(text, parse_mode="HTML", reply_markup=kb)
+        try:
+            return await target.edit_text(text, parse_mode="HTML", reply_markup=kb)
+        except Exception:
+            pass  # xabar o'zgarmagan yoki rasm/eski xabar - yangisini yuboramiz
+    await target.answer(text, parse_mode="HTML", reply_markup=kb)
 
 
-# ---------- Speaking ----------
-
-@router.message(F.text.in_({BTN_SPEAKING} | OLD_SPEAKING_BUTTONS))
-async def speaking_menu(message: Message, state: FSMContext):
+@router.message(F.text.in_({BTN_MOCKS, BTN_SPEAKING, BTN_WRITING} | OLD_SPEAKING_BUTTONS | OLD_WRITING_BUTTONS))
+@router.message(Command("mock", "mocklar"))
+async def mocks_menu(message: Message, state: FSMContext):
     await state.clear()
-    await _show_parts(message, "speaking", user_id=message.from_user.id)
+    await _show_mocks(message, message.from_user.id)
 
 
-@router.callback_query(F.data == "sp_menu")
-async def speaking_menu_cb(callback: CallbackQuery, state: FSMContext):
+# eski xabarlardagi (qismlar katalogi, shaxsiy testlar) tugmalar ham mocklar ro'yxatiga olib boradi
+_OLD_CATALOG = ("sp:", "spp:", "wr:", "wrp:", "my_new:", "my_np:", "my_open:", "my_wt:", "my_del:")
+
+
+@router.callback_query(F.data.startswith("mk:") | F.data.in_({"sp_menu", "wr_menu"})
+                       | F.data.startswith(_OLD_CATALOG))
+async def mocks_page(callback: CallbackQuery, state: FSMContext):
     await state.clear()  # chatda yozilayotgan yazma bekor bo'ladi - keyingi xabar insho deb olinmasin
-    await _show_parts(callback.message, "speaking", edit=True, user_id=callback.from_user.id)
+    bits = callback.data.split(":")
+    page = int(bits[1]) if bits[0] == "mk" and bits[1].lstrip("-").isdigit() else 0
+    await _show_mocks(callback.message, callback.from_user.id, page, edit=True)
     await callback.answer()
 
 
-PART_PAGE = 10
+async def _mock_or_alert(callback: CallbackQuery) -> dict | None:
+    m = await _find_mock(int(callback.data.split(":")[1]))
+    if not m:
+        await callback.answer("Bu mock hozir yopiq.", show_alert=True)
+    return m
 
 
-async def _part_page(kind: str, key: str, page: int):
-    """Qismdagi testlar: 10 tadan sahifa + «🎲 Tasodifiy test» (yuzlab test bo'lsa ham ekran yengil)."""
-    part = _part_from_key(key)
-    info = part_info(kind, part)
-    exams = (await _student_catalog(kind)).get(part, [])
-    pages = max(1, -(-len(exams) // PART_PAGE))
-    page = min(max(page, 0), pages - 1)
-    chunk = exams[page * PART_PAGE:(page + 1) * PART_PAGE]
-    icon, menu, pager = ("🎙", "sp_menu", "spp") if kind == "speaking" else ("✍️", "wr_menu", "wrp")
-    stamp = int(time.time())
-
-    def button(ex: dict, label: str) -> InlineKeyboardButton:
-        if kind == "speaking":
-            return InlineKeyboardButton(text=label, web_app=WebAppInfo(url=f"{WEBAPP_URL}/?exam={ex['id']}&t={stamp}"))
-        return InlineKeyboardButton(text=label, callback_data=f"wt:{ex['id']}")
-
-    rows = [[button(ex, f"{icon} {ex['title']}"[:60])] for ex in chunk]
-    nav = []
-    if page > 0:
-        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"{pager}:{key}:{page - 1}"))
-    if pages > 1:
-        nav.append(InlineKeyboardButton(text=f"{page + 1} / {pages}", callback_data=f"{pager}:{key}:{page}"))
-    if page < pages - 1:
-        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"{pager}:{key}:{page + 1}"))
-    if nav:
-        rows.append(nav)
-    if len(exams) > 1:
-        rows.append([button(random.choice(exams), "🎲 Tasodifiy test")])
-    rows.append([InlineKeyboardButton(text="⬅️ Turlar", callback_data=menu)])
-    about = f"\n<i>{e(info['about'])}</i>" if info.get("about") else ""
-    words = f"\n📏 Hajm: <b>{e(info['words'])}</b>" if kind == "writing" and info.get("words") else ""
-    if not exams:
-        tail = "Bu turda hozircha ochiq topshiriq yo'q."
-    elif kind == "speaking":
-        tail = f"📋 {len(exams)} ta test. Tanlang — tinch joyda bo'ling va mikrofonga ruxsat bering 🎧"
-    else:
-        tail = f"📋 {len(exams)} ta mavzu. Tanlang 👇"
-    text = f"{icon} <b>{e(info['name'])}</b>{about}{words}\n━━━━━━━━━━━━━━━━\n{tail}"
-    return text, InlineKeyboardMarkup(inline_keyboard=rows)
+@router.callback_query(F.data.startswith("mko:"))
+async def mock_open(callback: CallbackQuery, state: FSMContext):
+    m = await _mock_or_alert(callback)
+    if not m:
+        return
+    await state.clear()
+    B = InlineKeyboardButton
+    lines = [f"📚 <b>{e(m['title'])}</b>", "━━━━━━━━━━━━━━━━"]
+    row = []
+    if m["speaking"]:
+        parts = " → ".join(p for p in SP_PARTS if p in m["speaking"])
+        lines.append(f"🎙 <b>{SPEAKING_NAME}</b> — Part {parts}")
+        row.append(B(text=f"🎙 {SPEAKING_NAME}", callback_data=f"mks:{m['id']}"))
+    if m["writing"]:
+        lines.append(f"✍️ <b>{WRITING_NAME}</b> — 1-qism (2 xat) va 2-qism (blog / maqola), 60 daqiqa")
+        row.append(B(text=f"✍️ {WRITING_NAME}", callback_data=f"mkw:{m['id']}"))
+    lines.append("\nBo'limni tanlang 👇")
+    kb = InlineKeyboardMarkup(inline_keyboard=[row, [B(text="⬅️ Mocklar", callback_data="mk:0")]])
+    await callback.message.edit_text("\n".join(lines), parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
 
 
-@router.callback_query(F.data.startswith("sp:") | F.data.startswith("spp:"))
-async def speaking_part(callback: CallbackQuery, state: FSMContext):
-    allowed, reason = await check_access(callback.from_user.id, "speaking")
+def _webapp(label: str, query: str) -> InlineKeyboardButton:
+    return InlineKeyboardButton(text=label, web_app=WebAppInfo(url=f"{WEBAPP_URL}/?{query}&t={int(time.time())}"))
+
+
+@router.callback_query(F.data.startswith("mks:"))
+async def mock_speaking(callback: CallbackQuery, state: FSMContext):
+    m = await _mock_or_alert(callback)
+    if not m:
+        return
+    if not m["speaking"]:
+        return await callback.answer(f"Bu mockda {SPEAKING_NAME} hali yo'q.", show_alert=True)
+    first = {"id": next(iter(m["speaking"].values())), "mock_id": m["id"]}
+    allowed, reason = await check_access(callback.from_user.id, "speaking", exam=first)
     if not allowed:
         return await callback.answer(reason, show_alert=True)
     await state.clear()
-    bits = callback.data.split(":")
-    text, kb = await _part_page("speaking", bits[1], int(bits[2]) if len(bits) > 2 and bits[2].isdigit() else 0)
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    rows, lines = [], [f"🎙 <b>{e(m['title'])} — {SPEAKING_NAME}</b>", "━━━━━━━━━━━━━━━━"]
+    full = all(p in m["speaking"] for p in SP_PARTS)
+    if full:
+        lines.append("🔥 <b>Full mock</b> — Part 1.1 → 1.2 → 2 → 3 ketma-ket (~10 daqiqa), xuddi imtihondagidek. "
+                     "Oxirida umumiy ball (75 lik) va har qism tahlili.")
+        rows.append([_webapp("🔥 Full mock — hammasi ketma-ket", f"mock={m['id']}")])
+    lines.append("🧩 <b>Alohida qism</b> — vaqtingiz kam bo'lsa, faqat kerakli qismni ishlang:")
+    for p in SP_PARTS:
+        if p in m["speaking"]:
+            info = part_info("speaking", p)
+            lines.append(f"• <b>Part {p}</b> — {e(info['about'])}")
+    parts = [_webapp(f"Part {p}", f"exam={m['speaking'][p]}") for p in SP_PARTS if p in m["speaking"]]
+    rows += [parts[i:i + 2] for i in range(0, len(parts), 2)]
+    rows.append([InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"mko:{m['id']}")])
+    lines.append("\n🎧 Tinch joyda bo'ling va mikrofonga ruxsat bering.")
+    await callback.message.edit_text("\n".join(lines), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mkw:"))
+async def mock_writing(callback: CallbackQuery, state: FSMContext):
+    m = await _mock_or_alert(callback)
+    if not m:
+        return
+    if not m["writing"]:
+        return await callback.answer(f"Bu mockda {WRITING_NAME} hali yo'q.", show_alert=True)
+    wid = m["writing"]["id"]
+    allowed, reason = await check_access(callback.from_user.id, "writing", exam={"id": wid, "mock_id": m["id"]})
+    if not allowed:
+        return await callback.answer(reason, show_alert=True)
+    await state.clear()
+    B = InlineKeyboardButton
+    lines = [f"✍️ <b>{e(m['title'])} — {WRITING_NAME}</b>", "━━━━━━━━━━━━━━━━"]
+    if m["writing"]["part"] == "full":
+        lines += [
+            "🔥 <b>Full mock</b> — 1 va 2-qism birga, 60 daqiqa; natija 75 ballik standart ballda.",
+            "🧩 Yoki alohida qism:",
+            f"• <b>1-qism</b> — {e(WRITING_PARTS['1']['about'])} (~{WRITING_PARTS['1']['time']} daqiqa)",
+            f"• <b>2-qism</b> — {e(WRITING_PARTS['2']['about'])} (~{WRITING_PARTS['2']['time']} daqiqa)",
+        ]
+        rows = [[B(text="🔥 Full mock — 1 va 2-qism", callback_data=f"wt:{wid}:full")],
+                [B(text="1-qism — 2 xat", callback_data=f"wt:{wid}:1"),
+                 B(text="2-qism — blog", callback_data=f"wt:{wid}:2")]]
+    else:
+        info = part_info("writing", m["writing"]["part"])
+        lines.append(f"<b>{e(info['name'])}</b>")
+        rows = [[B(text="✍️ Boshlash", callback_data=f"wt:{wid}")]]
+    rows.append([B(text="⬅️ Orqaga", callback_data=f"mko:{m['id']}")])
+    await callback.message.edit_text("\n".join(lines), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
     await callback.answer()
 
 
 # ---------- Writing ----------
 
-@router.message(F.text.in_({BTN_WRITING} | OLD_WRITING_BUTTONS))
-async def writing_menu(message: Message, state: FSMContext):
-    await state.clear()
-    await _show_parts(message, "writing", user_id=message.from_user.id)
-
-
-@router.callback_query(F.data == "wr_menu")
-async def writing_menu_cb(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
-    await _show_parts(callback.message, "writing", edit=True, user_id=callback.from_user.id)
-    await callback.answer()
-
-
 @router.callback_query(F.data == "wr_cancel")
 async def writing_cancel(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.answer("Bekor qilindi")
-    await _show_parts(callback.message, "writing", user_id=callback.from_user.id)
+    await _show_mocks(callback.message, callback.from_user.id)
 
 
-@router.callback_query(F.data.startswith("wr:") | F.data.startswith("wrp:"))
-async def writing_part(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
-    bits = callback.data.split(":")
-    text, kb = await _part_page("writing", bits[1], int(bits[2]) if len(bits) > 2 and bits[2].isdigit() else 0)
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
-    await callback.answer()
+def _wmode(exam: dict, mode: str | None) -> str | None:
+    """Mockdagi to'liq yazmadan bitta qism: "1" / "2"; aks holda testning o'z turi."""
+    return mode if exam.get("part") == "full" and mode in ("1", "2") else exam.get("part")
 
 
 async def _open_writing_task(exam_id: int, user_id: int) -> tuple[dict | None, dict | None, dict]:
@@ -471,15 +527,18 @@ def _cancel_kb() -> InlineKeyboardMarkup:
 
 @router.callback_query(F.data.startswith("wt:"))
 async def writing_topic(callback: CallbackQuery, state: FSMContext):
-    """Mavzu tanlandi: topshiriqni ko'rsatib, yozish usulini tanlatadi."""
-    exam, row, values = await _open_writing_task(int(callback.data.split(":")[1]), callback.from_user.id)
+    """Mavzu tanlandi (mockda - qaysi qismi ham): topshiriqni ko'rsatib, yozish usulini tanlatadi."""
+    bits = callback.data.split(":")
+    exam, row, values = await _open_writing_task(int(bits[1]), callback.from_user.id)
     if not exam:
         return await callback.answer("Bu mavzu hozir yopiq.", show_alert=True)
     allowed, reason = await check_access(callback.from_user.id, "writing", exam=exam)
     if not allowed:
         return await callback.answer(reason, show_alert=True)
     await state.clear()
-    info = part_info("writing", exam["part"])
+    part = _wmode(exam, bits[2] if len(bits) > 2 else None)
+    mode = part if part != exam["part"] else ""
+    info = part_info("writing", part)
     letters = f", {LANG['lang_adj'].lower()} harflar paneli" if LANG.get("special_chars") else ""
     how = (
         "\n\nQanday yozasiz?\n"
@@ -490,15 +549,16 @@ async def writing_topic(callback: CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text="🖥 Imtihon rejimida yozish",
-            web_app=WebAppInfo(url=f"{WEBAPP_URL}/writing?exam={exam['id']}&t={int(time.time())}"),
+            web_app=WebAppInfo(url=f"{WEBAPP_URL}/writing?exam={exam['id']}{'&mode=' + mode if mode else ''}"
+                                   f"&t={int(time.time())}"),
         )],
-        [InlineKeyboardButton(text="💬 Chatda yozish", callback_data=f"wchat:{exam['id']}")],
-        [InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"my_open:{exam['id']}" if exam.get("owner_id")
-                              else f"wr:{_pkey(exam['part'])}")],
+        [InlineKeyboardButton(text="💬 Chatda yozish", callback_data=f"wchat:{exam['id']}:{mode}")],
+        [InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"mkw:{exam['mock_id']}" if exam.get("mock_id") else "mk:0")],
     ])
     if row["photo_file_id"]:
         await callback.message.answer_photo(row["photo_file_id"])
-    await _send_chunks(callback.message, writing.task_message(exam["title"], exam["part"], values) + how, kb)
+    title = f"{exam['title']} • {info['name'].split(' — ')[0]}" if mode else exam["title"]
+    await _send_chunks(callback.message, writing.task_message(title, part, values) + how, kb)
     await callback.answer()
 
 
@@ -516,166 +576,23 @@ def _ask_component_text(part: str | None, values: dict, step: int) -> str:
 
 @router.callback_query(F.data.startswith("wchat:"))
 async def writing_chat_start(callback: CallbackQuery, state: FSMContext):
-    exam, _, values = await _open_writing_task(int(callback.data.split(":")[1]), callback.from_user.id)
+    bits = callback.data.split(":")
+    exam, _, values = await _open_writing_task(int(bits[1]), callback.from_user.id)
     if not exam:
         return await callback.answer("Bu mavzu hozir yopiq.", show_alert=True)
     allowed, reason = await check_access(callback.from_user.id, "writing", exam=exam)
     if not allowed:
         return await callback.answer(reason, show_alert=True)
+    part = _wmode(exam, bits[2] if len(bits) > 2 else None)
     await state.clear()
     await state.set_state(WritingAnswer.text)
-    await state.update_data(exam_id=exam["id"], step=0, texts={}, pending=None, started=time.time())
-    await callback.message.answer(_ask_component_text(exam["part"], values, 0), parse_mode="HTML", reply_markup=_cancel_kb())
+    await state.update_data(exam_id=exam["id"], part=part, step=0, texts={}, pending=None, started=time.time())
+    await callback.message.answer(_ask_component_text(part, values, 0), parse_mode="HTML", reply_markup=_cancel_kb())
     await callback.answer()
-
-
-# ---------- 🧪 O'quvchining shaxsiy testlari (Standard / Pro): 2 soat turadi, keyin o'chadi ----------
-
-MAX_OWN_TESTS = 3  # bir vaqtda nechta shaxsiy test bo'lishi mumkin
-
-
-async def _create_denied(user_id: int, kind: str) -> str | None:
-    """Shaxsiy test yaratib bo'lmasa - sababi. Yaratish tarif limitidan 1 ta oladi (o'z testini esa cheksiz
-    topshiradi); bir vaqtda ko'pi bilan MAX_OWN_TESTS ta faol test."""
-    if len(await db.my_personal_exams(user_id)) >= MAX_OWN_TESTS:
-        return (f"Bir vaqtda ko'pi bilan {MAX_OWN_TESTS} ta shaxsiy test bo'ladi. "
-                "Eskisini o'chiring yoki muddati tugashini kuting.")
-    allowed, reason = await check_access(user_id, kind)
-    return None if allowed else reason
-
-
-def _minutes_left(exam: dict) -> int:
-    try:
-        until = datetime.strptime(exam["expires_at"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-        return max(1, int((until - datetime.now(timezone.utc)).total_seconds() // 60))
-    except (TypeError, ValueError, KeyError):
-        return 0
-
-
-async def _personal_view(exam: dict):
-    kind = exam.get("kind") or "speaking"
-    info = part_info(kind, exam.get("part"))
-    back = InlineKeyboardButton(text="⬅️ Orqaga", callback_data="sp_menu" if kind == "speaking" else "wr_menu")
-    lines = [f"🧪 <b>Shaxsiy test</b> — {KIND_ICON[kind]} {KIND_NAME[kind]}\n<i>{e(info['name'])}</i>"]
-    if not db.exam_open_for(exam, exam["owner_id"]):
-        lines.append("\n⌛ Bu testning muddati tugagan va u o'chirildi. Natijangiz saqlangan.")
-        return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=[[back]])
-    lines.append(f"⏳ Taxminan <b>{_minutes_left(exam)} daqiqa</b>dan keyin o'chadi (natijangiz saqlanib qoladi). "
-                 "Testni faqat siz ko'rasiz.\n")
-    rows = []
-    if kind == "speaking":
-        questions = await db.get_questions(exam["id"])
-        for i, q in enumerate(questions, 1):
-            photo = " 🖼" if q["photo_file_id"] else ""
-            lines.append(f"<b>{i}.</b>{photo} {e(_preview(q['text'], 200))}\n    ⏳ {q['prep_sec']} s, 🎙 {q['answer_sec']} s")
-        if questions:
-            rows.append([InlineKeyboardButton(text="▶️ Testni boshlash", web_app=WebAppInfo(
-                url=f"{WEBAPP_URL}/?exam={exam['id']}&t={int(time.time())}"))])
-        else:
-            lines.append("Hali savol yo'q.")
-        count = info.get("count")
-        if not count or len(questions) < count:
-            rows.append([InlineKeyboardButton(text="➕ Savol qo'shish", callback_data=f"q_new:{exam['id']}")])
-    else:
-        values = writing.task_values(exam.get("part"), await db.get_writing_task(exam["id"]))
-        if writing.missing_fields(exam.get("part"), values):
-            lines.append("❗ Topshiriq hali to'liq emas.")
-            rows.append([InlineKeyboardButton(text="📝 Topshiriqni to'ldirish", callback_data=f"my_wt:{exam['id']}")])
-        else:
-            lines.append("✅ Topshiriq tayyor.")
-            rows.append([InlineKeyboardButton(text="✍️ Yozishni boshlash", callback_data=f"wt:{exam['id']}")])
-    rows.append([InlineKeyboardButton(text="🗑 Testni o'chirish", callback_data=f"my_del:{exam['id']}")])
-    rows.append([back])
-    return _join_limited(lines), InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-async def _own_exam(callback: CallbackQuery) -> dict | None:
-    exam = await db.get_exam(int(callback.data.split(":")[1]))
-    if not exam or exam.get("owner_id") != callback.from_user.id:
-        await callback.answer("Test topilmadi.", show_alert=True)
-        return None
-    return exam
-
-
-@router.callback_query(F.data.startswith("my_new:"))
-async def my_test_new(callback: CallbackQuery, state: FSMContext):
-    kind = callback.data.split(":")[1]
-    if kind not in KIND_NAME:
-        return await callback.answer()
-    uid = callback.from_user.id
-    denied = await _create_denied(uid, kind)
-    if denied:
-        return await callback.answer(denied, show_alert=True)
-    await state.clear()
-    rows = [[InlineKeyboardButton(text=info["name"], callback_data=f"my_np:{kind}:{key}")]
-            for key, info in parts_for(kind).items()]
-    rows.append([InlineKeyboardButton(text="⬅️ Orqaga", callback_data="sp_menu" if kind == "speaking" else "wr_menu")])
-    await callback.message.edit_text(
-        f"🧪 <b>O'z testingiz — {KIND_NAME[kind]}</b>\n\n"
-        f"• yaratish tarif limitidan <b>1 ta</b> oladi;\n"
-        f"• o'z testingizni <b>cheksiz</b> topshirasiz;\n"
-        f"• test faqat sizga ko'rinadi va {db.PERSONAL_TTL_HOURS} soatdan keyin o'chadi (natijalar qoladi).\n\n"
-        "Turini tanlang 👇",
-        parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("my_np:"))
-async def my_test_part(callback: CallbackQuery, state: FSMContext):
-    _, kind, part = callback.data.split(":", 2)
-    uid = callback.from_user.id
-    if kind not in KIND_NAME or part not in parts_for(kind):
-        return await callback.answer("Qaytadan boshlang.", show_alert=True)
-    denied = await _create_denied(uid, kind)
-    if denied:
-        return await callback.answer(denied, show_alert=True)
-    short = part_info(kind, part)["name"].split(" — ")[0]
-    exam_id = await db.create_personal_exam(uid, f"Mening testim — {short}", kind, part)
-    await callback.message.edit_reply_markup(reply_markup=None)
-    intro = (f"🧪 Shaxsiy test yaratildi ({e(short)}). U faqat sizga ko'rinadi va {db.PERSONAL_TTL_HOURS} soatdan "
-             "keyin o'chadi.\n\n")
-    if kind == "writing":
-        await _start_task_flow(callback.message, state, exam_id, part, intro=intro.strip())
-    else:
-        await _ask_question_text(callback.message, state, exam_id, intro=intro)
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("my_open:"))
-async def my_test_open(callback: CallbackQuery, state: FSMContext):
-    exam = await _own_exam(callback)
-    if not exam:
-        return
-    await state.clear()
-    text, kb = await _personal_view(exam)
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("my_wt:"))
-async def my_test_fill(callback: CallbackQuery, state: FSMContext):
-    exam = await _own_exam(callback)
-    if not exam or not db.exam_open_for(exam, callback.from_user.id):
-        return await callback.answer("Muddati tugagan.", show_alert=True) if exam else None
-    values = writing.task_values(exam.get("part"), await db.get_writing_task(exam["id"]))
-    missing = writing.missing_fields(exam.get("part"), values) or writing.fields_for(exam.get("part"))
-    await _start_task_flow(callback.message, state, exam["id"], exam.get("part"), missing)
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("my_del:"))
-async def my_test_delete(callback: CallbackQuery, state: FSMContext):
-    exam = await _own_exam(callback)
-    if not exam:
-        return
-    await state.clear()
-    await db.archive_personal(exam["id"])
-    await _show_parts(callback.message, exam.get("kind") or "speaking", edit=True, user_id=callback.from_user.id)
-    await callback.answer("Test o'chirildi")
 
 
 MENU_BUTTONS = (
-    {BTN_SPEAKING, BTN_WRITING, BTN_ADMIN, BTN_PREMIUM}
+    {BTN_MOCKS, BTN_SPEAKING, BTN_WRITING, BTN_ADMIN, BTN_PREMIUM, BTN_PROFILE, BTN_RESULTS}
     | OLD_SPEAKING_BUTTONS | OLD_WRITING_BUTTONS | OLD_PREMIUM_BUTTONS
 )
 
@@ -704,7 +621,7 @@ async def writing_answer(message: Message, state: FSMContext):
     n = writing.count_words(text)
     if n < 5:
         return await message.answer("Matn juda qisqa. To'liq javobingizni bitta xabar qilib yuboring.")
-    comp = part_info("writing", exam["part"])["components"][data.get("step", 0)]
+    comp = part_info("writing", _wmode(exam, data.get("part")))["components"][data.get("step", 0)]
     await _drop_pending_kb(message, data)  # oldingi tasdiq xabaridagi tugmalar endi kerak emas
     if n < comp.get("wmin", 0):
         # Talabdan ancha qisqa - tasodifan yarim matn yuborilmaganiga ishonch hosil qilamiz
@@ -761,7 +678,7 @@ async def _accept_component(target: Message, state: FSMContext, text: str, user)
     if not exam:
         await state.clear()
         return await target.answer("Mavzu topilmadi. Qaytadan tanlang.")
-    part = exam["part"]
+    part = _wmode(exam, data.get("part"))
     comps = part_info("writing", part)["components"]
     step = data.get("step", 0)
     texts = dict(data.get("texts") or {})
@@ -802,6 +719,7 @@ async def _grade_writing_chat(target: Message, state: FSMContext, user):
     if not exam:
         await state.clear()
         return await target.answer("Mavzu topilmadi. Qaytadan tanlang.")
+    exam = {**exam, "part": _wmode(exam, data.get("part"))}
     wait = await target.answer("⏳ Ishingiz rasmiy mezonlar bo'yicha tekshirilmoqda... (20–60 soniya)")
     try:
         result, fresh = await writing.grade_and_store(
@@ -873,16 +791,197 @@ async def writing_answer_wrong(message: Message):
 
 
 # ======================================================================
+# ADMIN: mocklar (har biri: Konuşma Part 1.1 / 1.2 / 2 / 3 + to'liq Yazma)
+# ======================================================================
+
+class MockSearch(StatesGroup):
+    query = State()
+
+
+async def _admin_mocks_view(page: int = 0, query: str | None = None):
+    """Admin: mocklar tartib raqami bo'yicha, 10 tadan; raqam / nom bo'yicha qidiruv."""
+    page = max(page, 0)
+    mocks, total = await db.list_mocks_page(page * MOCK_PAGE, MOCK_PAGE, query)
+    if not mocks and page:
+        page = max(0, (total - 1) // MOCK_PAGE)
+        mocks, total = await db.list_mocks_page(page * MOCK_PAGE, MOCK_PAGE, query)
+    head = f"🔎 <b>«{e(query)}»</b>: {total} ta mock" if query else f"📚 <b>Mocklar</b> — jami {total} ta"
+    lines = [head, "━━━━━━━━━━━━━━━━",
+             "Har bir mock: 🎙 Part 1.1, 1.2, 2, 3 + ✍️ Yazma (1 va 2-qism). Mockni ochib, qismlarini to'ldiring.\n"]
+    B = InlineKeyboardButton
+    buttons = []
+    for m in mocks:
+        status = "✅" if m["sp_ready"] == len(SP_PARTS) and m["wr_ready"] else ("🟡" if m["sp_ready"] or m["wr_ready"] else "❗")
+        lines.append(f"{status} <b>{e(m['title'])}</b> — 🎙 {m['sp_ready']}/{len(SP_PARTS)} • ✍️ {'✓' if m['wr_ready'] else '—'}")
+        buttons.append(B(text=f"{status} {m['title']}"[:30], callback_data=f"mka:{m['id']}"))
+    if not mocks:
+        lines.append("Hech narsa topilmadi." if query else "Hali mock yo'q — «➕ Yangi mock» bilan yarating.")
+    else:
+        lines.append("\n✅ to'liq • 🟡 qisman (tayyor qismlari o'quvchilarga ko'rinadi) • ❗ bo'sh")
+    rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+    pages = max(1, -(-total // MOCK_PAGE))
+    if pages > 1 and not query:
+        nav = [B(text="◀️", callback_data=f"mkap:{page - 1}")] if page > 0 else []
+        nav.append(B(text=f"{page + 1} / {pages}", callback_data=f"mkap:{page}"))
+        if page < pages - 1:
+            nav.append(B(text="▶️", callback_data=f"mkap:{page + 1}"))
+        rows.append(nav)
+    rows.append([B(text="➕ Yangi mock", callback_data="mka_new"), B(text="🔎 Qidirish", callback_data="mka_find")])
+    if query:
+        rows.append([B(text="⬅️ Mocklar", callback_data="adm_exams")])
+    else:
+        rows.append([B(text="🗂 Eski testlar", callback_data="exs:0"), B(text="⬅️ Orqaga", callback_data="admin")])
+    return _join_limited(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _admin_mock_view(mock_id: int):
+    mock = await db.get_mock(mock_id)
+    B = InlineKeyboardButton
+    if not mock:
+        return "Mock topilmadi.", InlineKeyboardMarkup(inline_keyboard=[[B(text="⬅️ Mocklar", callback_data="adm_exams")]])
+    exams = await db.mock_exams(mock_id)
+    lines = [f"📚 <b>{e(mock['title'])}</b>", "━━━━━━━━━━━━━━━━"]
+    rows, sp = [], []
+    order = {p: i for i, p in enumerate(SP_PARTS)}
+    for ex in sorted(exams, key=lambda x: ((x.get("kind") or "speaking") == "writing", order.get(x.get("part"), 9))):
+        kind = ex.get("kind") or "speaking"
+        ok = _ready(ex)
+        if kind == "speaking":
+            info = part_info(kind, ex.get("part"))
+            need = info.get("count")
+            count = f"{ex['q_count']}/{need}" if need else str(ex["q_count"])
+            lines.append(f"{'✅' if ok else '❗'} 🎙 <b>Part {e(ex.get('part'))}</b> — {count} savol")
+            sp.append(B(text=f"{'✅' if ok else '❗'} Part {ex.get('part')}", callback_data=f"exam:{ex['id']}"))
+        else:
+            lines.append(f"{'✅' if ok else '❗'} ✍️ <b>{WRITING_NAME}</b> — " + ("topshiriq to'liq" if ok else "topshiriq to'ldirilmagan"))
+            rows.append([B(text=f"{'✅' if ok else '❗'} ✍️ {WRITING_NAME}", callback_data=f"exam:{ex['id']}")])
+    rows = [sp[i:i + 2] for i in range(0, len(sp), 2)] + rows
+    lines.append("\nQismni bosing — savollar / topshiriqni qo'shasiz va tahrirlaysiz. Tayyor qismlar o'quvchilarga "
+                 "darhol ko'rinadi; 🔥 Full mock — 4 ta Konuşma qismi ham tayyor bo'lganda.")
+    rows.append([B(text="✏️ Nomini o'zgartirish", callback_data=f"mkar:{mock_id}"),
+                 B(text="🗑 Mockni o'chirish", callback_data=f"mkad:{mock_id}")])
+    rows.append([B(text="⬅️ Mocklar", callback_data="adm_exams")])
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@router.callback_query(F.data.startswith("mkap:"))
+async def admin_mocks_page(callback: CallbackQuery, state: FSMContext):
+    if not _admin_only(callback.from_user.id):
+        return await callback.answer()
+    await state.clear()
+    text, kb = await _admin_mocks_view(int(callback.data.split(":")[1]))
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mka:"))
+async def admin_mock_open(callback: CallbackQuery, state: FSMContext):
+    if not _admin_only(callback.from_user.id):
+        return await callback.answer()
+    await state.clear()
+    text, kb = await _admin_mock_view(int(callback.data.split(":")[1]))
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "mka_new")
+async def admin_mock_new(callback: CallbackQuery, state: FSMContext):
+    if not _admin_only(callback.from_user.id):
+        return await callback.answer()
+    await state.clear()
+    mock_id = await db.create_mock()
+    text, kb = await _admin_mock_view(mock_id)
+    await callback.message.edit_text("🆕 Yangi mock yaratildi.\n\n" + text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer("Mock yaratildi")
+
+
+@router.callback_query(F.data == "mka_find")
+async def admin_mock_find_ask(callback: CallbackQuery, state: FSMContext):
+    if not _admin_only(callback.from_user.id):
+        return await callback.answer()
+    await state.clear()
+    await state.set_state(MockSearch.query)
+    await callback.message.answer("🔎 Mock raqamini (masalan, <code>12</code>) yoki nomini yozing. Bekor qilish: /cancel",
+                                  parse_mode="HTML")
+    await callback.answer()
+
+
+@router.message(MockSearch.query)
+async def admin_mock_find(message: Message, state: FSMContext):
+    if not _admin_only(message.from_user.id):
+        return
+    query = (message.text or "").strip()
+    if not query or query.startswith("/"):
+        return await message.answer("Raqam yoki nomni matn bilan yozing. Bekor qilish: /cancel")
+    await state.clear()
+    text, kb = await _admin_mocks_view(0, query[:60])
+    await message.answer(text, parse_mode="HTML", reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("mkad:"))
+async def admin_mock_delete_ask(callback: CallbackQuery):
+    if not _admin_only(callback.from_user.id):
+        return await callback.answer()
+    mock = await db.get_mock(int(callback.data.split(":")[1]))
+    if not mock:
+        return await callback.answer("Mock topilmadi.", show_alert=True)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🗑 Ha, o'chirish", callback_data=f"mkady:{mock['id']}"),
+        InlineKeyboardButton(text="❌ Yo'q", callback_data=f"mka:{mock['id']}"),
+    ]])
+    await callback.message.edit_text(
+        f"🗑 <b>{e(mock['title'])}</b> butunlay o'chirilsinmi? Uning hamma savollari va topshirig'i o'chadi "
+        "(o'quvchilarning natijalari saqlanib qoladi).", parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mkady:"))
+async def admin_mock_delete(callback: CallbackQuery):
+    if not _admin_only(callback.from_user.id):
+        return await callback.answer()
+    await db.delete_mock(int(callback.data.split(":")[1]))
+    text, kb = await _admin_mocks_view()
+    await callback.message.edit_text("🗑 Mock o'chirildi.\n\n" + text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer("O'chirildi")
+
+
+class RenameMock(StatesGroup):
+    title = State()
+
+
+@router.callback_query(F.data.startswith("mkar:"))
+async def admin_mock_rename_ask(callback: CallbackQuery, state: FSMContext):
+    if not _admin_only(callback.from_user.id):
+        return await callback.answer()
+    await state.clear()
+    await state.set_state(RenameMock.title)
+    await state.update_data(mock_id=int(callback.data.split(":")[1]))
+    await callback.message.answer("✏️ Mockning yangi nomini yozing (masalan: <i>Mock 7 — Sınav ayı</i>). Bekor qilish: /cancel",
+                                  parse_mode="HTML")
+    await callback.answer()
+
+
+@router.message(RenameMock.title)
+async def admin_mock_rename(message: Message, state: FSMContext):
+    if not _admin_only(message.from_user.id):
+        return
+    title = (message.text or "").strip()
+    if not title or title.startswith("/") or len(title) > 40:
+        return await message.answer("Nom 1–40 belgidan iborat matn bo'lsin. Bekor qilish: /cancel")
+    mock_id = (await state.get_data()).get("mock_id")
+    await state.clear()
+    await db.rename_mock(mock_id, title)
+    text, kb = await _admin_mock_view(mock_id)
+    await message.answer(text, parse_mode="HTML", reply_markup=kb)
+
+
+# ======================================================================
 # ADMIN: imtihonlar ro'yxati
 # ======================================================================
 
 async def _may_build(user_id: int, exam_id: int | None) -> bool:
-    """Testga savol / topshiriq qo'sha oladimi: admin - har qanday testga; o'quvchi - faqat o'zining
-    muddati tugamagan shaxsiy testiga."""
-    if is_admin(user_id):
-        return True
-    exam = await db.get_exam(exam_id) if exam_id else None
-    return bool(exam and exam.get("owner_id") == user_id and db.exam_open_for(exam, user_id))
+    """Testga savol / topshiriq qo'sha oladimi: faqat admin (o'quvchilar endi test yaratmaydi)."""
+    return is_admin(user_id)
 
 
 def _admin_only(user_id: int) -> bool:
@@ -905,20 +1004,19 @@ async def _with_task(exam: dict) -> dict:
 
 async def _admin_panel_view(user_id: int):
     """Admin bosh sahifasi: qisqa ko'rsatkichlar va shu adminga ochiq bo'limlar (Boss - hammasi + Boss paneli)."""
-    counts = await db.count_exams_by_kind()
     st = await db.get_stats()
     boss = is_owner(user_id)
     perms = roles.perms_of(user_id)
     title = "👑 <b>Boss</b> • Admin panel" if boss else "👨‍🏫 <b>Admin panel</b>"
     text = (
         f"{title}\n━━━━━━━━━━━━━━━━\n"
-        f"📚 Testlar: 🎙 <b>{counts.get('speaking', 0)}</b> • ✍️ <b>{counts.get('writing', 0)}</b>\n"
+        f"📚 Mocklar: <b>{await db.count_mocks()}</b>\n"
         f"👥 O'quvchilar: <b>{st['users']}</b> (bugun +{st['new_today']})\n"
         f"💎 Obunachilar: <b>{st['premium']}</b>\n"
         f"🎯 Bugungi tekshiruvlar: <b>{st['today']}</b>\n━━━━━━━━━━━━━━━━"
     )
     B = InlineKeyboardButton
-    items = [("tests", "📚 Testlar", "adm_exams"), ("users", "👥 Foydalanuvchilar", "adm_users:0"),
+    items = [("tests", "📚 Mocklar", "adm_exams"), ("users", "👥 Foydalanuvchilar", "adm_users:0"),
              ("premium", "💎 Premium", "adm_prem"), ("results", "📊 Natijalar", "results:0"),
              ("broadcast", "📣 Xabar yuborish", "adm_bc"), ("stats", "📈 Statistika", "adm_stats")]
     buttons = [B(text=label, callback_data=data) for key, label, data in items if key in perms]
@@ -960,11 +1058,12 @@ async def _exams_view(page: int = 0, query: str | None = None):
         head = f"🔎 <b>«{e(query)}»</b> bo'yicha: {total} ta test"
     else:
         counts = await db.count_exams_by_kind()
-        head = (f"📚 <b>Testlar</b> — jami {total} ta (🎙 {counts.get('speaking', 0)} • ✍️ {counts.get('writing', 0)})")
+        head = (f"🗂 <b>Eski testlar</b> (mockka kirmagan) — {total} ta (🎙 {counts.get('speaking', 0)} • "
+                f"✍️ {counts.get('writing', 0)})\n<i>O'quvchilar endi faqat mocklarni ko'radi — bu testlar arxiv.</i>")
     lines = [head, "━━━━━━━━━━━━━━━━"]
     rows = []
     if not exams:
-        lines.append("Hech narsa topilmadi." if query else "Hali test yo'q. Quyidagi tugmalar bilan birinchisini yarating.")
+        lines.append("Hech narsa topilmadi." if query else "Eski testlar yo'q.")
     else:
         first = page * EXAMS_PER_PAGE + 1
         lines.append(f"{'Topilganlar' if query else 'Eng yangilari'} ({first}–{first + len(exams) - 1}):")
@@ -986,11 +1085,8 @@ async def _exams_view(page: int = 0, query: str | None = None):
     if nav:
         rows.append(nav)
     rows.append([InlineKeyboardButton(text="🔎 Nomi bo'yicha qidirish", callback_data="ex_find")])
-    rows.append([
-        InlineKeyboardButton(text=f"➕ 🎙 {SPEAKING_NAME}", callback_data="nk:speaking"),
-        InlineKeyboardButton(text=f"➕ ✍️ {WRITING_NAME}", callback_data="nk:writing"),
-    ])
-    rows.append([InlineKeyboardButton(text="⬅️ Testlar" if query else "⬅️ Orqaga", callback_data="adm_exams" if query else "admin")])
+    rows.append([InlineKeyboardButton(text="⬅️ Eski testlar" if query else "⬅️ Mocklar",
+                                      callback_data="exs:0" if query else "adm_exams")])
     return _join_limited(lines), InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -1073,8 +1169,6 @@ async def _writing_task_view(exam: dict) -> tuple[list[str], list[list[InlineKey
 
 async def _exam_view(exam_id: int):
     exam = await db.get_exam(exam_id)
-    if exam and exam.get("owner_id") is not None:
-        return await _personal_view(exam)
     if not exam:
         return "Imtihon topilmadi.", InlineKeyboardMarkup(
             inline_keyboard=[[InlineKeyboardButton(text="⬅️ Testlar", callback_data="adm_exams")]]
@@ -1111,9 +1205,12 @@ async def _exam_view(exam_id: int):
             add.append(InlineKeyboardButton(text="⏱ Hamma savollar vaqti", callback_data=f"qall:{exam_id}"))
         rows.append(add)
 
+    if exam.get("mock_id"):  # mockning qismi: alohida o'chirilmaydi (butun mock o'chiriladi)
+        rows.append([InlineKeyboardButton(text="⬅️ Mockka qaytish", callback_data=f"mka:{exam['mock_id']}")])
+        return _join_limited(lines), InlineKeyboardMarkup(inline_keyboard=rows)
     rows.append([InlineKeyboardButton(text="✏️ Nomini o'zgartirish", callback_data=f"exam_ren:{exam_id}")])
     rows.append([InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"exam_del_ask:{exam_id}")])
-    rows.append([InlineKeyboardButton(text="⬅️ Testlar", callback_data="adm_exams")])
+    rows.append([InlineKeyboardButton(text="⬅️ Eski testlar", callback_data="exs:0")])
     return _join_limited(lines), InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -1132,7 +1229,7 @@ async def exams_list_cb(callback: CallbackQuery, state: FSMContext):
     if not _admin_only(callback.from_user.id):
         return await callback.answer()
     await state.clear()
-    text, kb = await _exams_view()
+    text, kb = await _admin_mocks_view()
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
     await callback.answer()
 

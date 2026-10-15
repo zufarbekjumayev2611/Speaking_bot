@@ -20,6 +20,12 @@ CREATE TABLE IF NOT EXISTS exams (
     part TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS mocks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    number INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+);
 CREATE TABLE IF NOT EXISTS questions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     exam_id INTEGER NOT NULL,
@@ -124,6 +130,7 @@ _MIGRATIONS = [
     "ALTER TABLE exams ADD COLUMN owner_id INTEGER",
     "ALTER TABLE exams ADD COLUMN expires_at TEXT",
     "ALTER TABLE admins ADD COLUMN perms TEXT",  # adminning ochiq bo'limlari (NULL - hammasi), roles.py
+    "ALTER TABLE exams ADD COLUMN mock_id INTEGER",  # qaysi mockning qismi (NULL - eski, alohida test)
 ]
 
 
@@ -192,6 +199,7 @@ _settings: dict[str, str] = {}
 _INDEXES = [
     "CREATE INDEX IF NOT EXISTS ix_questions_exam ON questions(exam_id, position)",
     "CREATE INDEX IF NOT EXISTS ix_exams_active ON exams(is_active, kind, part)",
+    "CREATE INDEX IF NOT EXISTS ix_exams_mock ON exams(mock_id)",
     "CREATE INDEX IF NOT EXISTS ix_attempts_user ON attempts(telegram_id, status, created_at)",
     "CREATE INDEX IF NOT EXISTS ix_attempts_status ON attempts(status, created_at)",
     "CREATE INDEX IF NOT EXISTS ix_answers_attempt ON answers(attempt_id)",
@@ -296,7 +304,7 @@ async def _fetchone(sql, params=()):
 # Testlar katalogi versiyasi: exams / questions jadvaliga har yozuvda oshadi - bot.py dagi o'quvchi katalogi
 # keshi shu orqali eskirganini biladi (har menyu ochilishida bazaga borilmaydi).
 CATALOG_VERSION = 0
-_CATALOG_TABLES = re.compile(r"\b(exams|questions)\b", re.IGNORECASE)
+_CATALOG_TABLES = re.compile(r"\b(exams|questions|mocks)\b", re.IGNORECASE)
 
 
 def _touch_catalog(sql: str):
@@ -466,7 +474,7 @@ def like_variants(q: str) -> list[str]:
 async def list_exams_page(offset: int = 0, limit: int = 10, query: str | None = None) -> tuple[list[dict], int]:
     """Admin testlari: eng yangisi birinchi, faqat bitta sahifa (ko'p test bo'lsa ham baza yuklanmaydi).
     query - nom bo'yicha qidiruv. (qatorlar, jami soni) qaytadi."""
-    where, params = "e.owner_id IS NULL", []
+    where, params = "e.owner_id IS NULL AND e.mock_id IS NULL", []
     if query:
         pats = like_variants(query)
         where += " AND (" + " OR ".join("e.title LIKE ?" for _ in pats) + ")"
@@ -548,6 +556,105 @@ async def set_exam_active(exam_id: int, active: bool):
 async def delete_exam(exam_id: int):
     await _execute("DELETE FROM questions WHERE exam_id = ?", (exam_id,))
     await _execute("DELETE FROM exams WHERE id = ?", (exam_id,))
+
+
+# ---------- Mocklar: har biri 4 ta Konuşma qismi (1.1, 1.2, 2, 3) + 1 ta to'liq Yazma ----------
+
+MOCK_SPEAKING_PARTS = ("1.1", "1.2", "2", "3")
+
+
+async def create_mock(title: str | None = None) -> int:
+    """Yangi mock: tartib raqami avtomatik, ichida 5 ta bo'sh test (savollari keyin qo'shiladi)."""
+    n = (await _fetchone("SELECT COALESCE(MAX(number), 0) + 1 AS n FROM mocks"))["n"]
+    mock_id = await _execute("INSERT INTO mocks (number, title) VALUES (?, ?)", (n, title or f"Mock {n}"))
+    sql = "INSERT INTO exams (title, kind, part, is_active, mock_id) VALUES (?, ?, ?, 1, ?)"
+    await _execute_many(
+        [(sql, (f"Mock {n} • Part {p}", "speaking", p, mock_id)) for p in MOCK_SPEAKING_PARTS]
+        + [(sql, (f"Mock {n} • Yazma", "writing", "full", mock_id))]
+    )
+    return mock_id
+
+
+async def get_mock(mock_id: int):
+    return await _fetchone("SELECT * FROM mocks WHERE id = ?", (mock_id,))
+
+
+async def count_mocks() -> int:
+    return (await _fetchone("SELECT COUNT(*) AS c FROM mocks"))["c"]
+
+
+async def mock_exams(mock_id: int):
+    """Mockning testlari (savollar soni va birinchi savol / topshiriq bilan) - bitta so'rovda."""
+    return await _fetchall(
+        """SELECT e.*, (SELECT COUNT(*) FROM questions q WHERE q.exam_id = e.id) AS q_count,
+                  (SELECT q.text FROM questions q WHERE q.exam_id = e.id ORDER BY q.position, q.id LIMIT 1) AS task_text,
+                  (SELECT q.meta FROM questions q WHERE q.exam_id = e.id ORDER BY q.position, q.id LIMIT 1) AS task_meta
+           FROM exams e WHERE e.mock_id = ? ORDER BY COALESCE(e.kind, 'speaking') DESC, e.part, e.id""",
+        (mock_id,),
+    )
+
+
+async def all_mocks_with_exams():
+    """Hamma mocklar va ularning testlari (o'quvchi katalogi uchun, xotirada keshlanadi)."""
+    return await _fetchall(
+        """SELECT m.id AS mock_id, m.number, m.title AS mock_title, e.id, e.kind, e.part, e.title,
+                  (SELECT COUNT(*) FROM questions q WHERE q.exam_id = e.id) AS q_count,
+                  (SELECT q.text FROM questions q WHERE q.exam_id = e.id ORDER BY q.position, q.id LIMIT 1) AS task_text,
+                  (SELECT q.meta FROM questions q WHERE q.exam_id = e.id ORDER BY q.position, q.id LIMIT 1) AS task_meta
+           FROM mocks m LEFT JOIN exams e ON e.mock_id = m.id AND e.is_active = 1
+           ORDER BY m.number, m.id, e.id"""
+    )
+
+
+async def list_mocks_page(offset: int = 0, limit: int = 10, query: str | None = None) -> tuple[list[dict], int]:
+    """Admin uchun: mocklar tartib raqami bo'yicha, bitta sahifa. query - raqam yoki nom."""
+    where, params = "1 = 1", []
+    q = (query or "").strip()
+    if q:
+        digits = "".join(ch for ch in q if ch.isdigit())
+        if digits and len(digits) <= 6:
+            where, params = "m.number = ?", [int(digits)]
+        else:
+            pats = like_variants(q)
+            where = "(" + " OR ".join("m.title LIKE ?" for _ in pats) + ")"
+            params = pats
+    total = (await _fetchone(f"SELECT COUNT(*) AS c FROM mocks m WHERE {where}", tuple(params)))["c"]
+    rows = await _fetchall(
+        f"""SELECT m.*,
+                   (SELECT COUNT(*) FROM exams e WHERE e.mock_id = m.id AND e.kind = 'speaking'
+                      AND EXISTS (SELECT 1 FROM questions q WHERE q.exam_id = e.id)) AS sp_ready,
+                   (SELECT COUNT(*) FROM exams e WHERE e.mock_id = m.id AND e.kind = 'writing'
+                      AND EXISTS (SELECT 1 FROM questions q WHERE q.exam_id = e.id)) AS wr_ready
+            FROM mocks m WHERE {where} ORDER BY m.number, m.id LIMIT ? OFFSET ?""",
+        tuple(params) + (limit, offset),
+    )
+    return rows, total
+
+
+async def delete_mock(mock_id: int):
+    """Mock va uning savollari o'chadi; o'quvchilar natijalari (urinishlar) saqlanib qoladi."""
+    await _execute_many([
+        ("DELETE FROM questions WHERE exam_id IN (SELECT id FROM exams WHERE mock_id = ?)", (mock_id,)),
+        ("DELETE FROM exams WHERE mock_id = ?", (mock_id,)),
+        ("DELETE FROM mocks WHERE id = ?", (mock_id,)),
+    ])
+
+
+async def rename_mock(mock_id: int, title: str):
+    await _execute("UPDATE mocks SET title = ? WHERE id = ?", (title, mock_id))
+
+
+async def mocks_done(telegram_id: int) -> set[int]:
+    """O'quvchi kamida bir qismini ishlagan mocklar (ro'yxatda ✅ belgisi uchun)."""
+    rows = await _fetchall(
+        """SELECT DISTINCT e.mock_id FROM attempts a JOIN exams e ON e.id = a.exam_id
+           WHERE a.telegram_id = ? AND a.status = 'done' AND e.mock_id IS NOT NULL
+           UNION
+           SELECT DISTINCT e.mock_id FROM writing_submissions w JOIN exams e ON e.id = w.exam_id
+           WHERE w.telegram_id = ? AND w.status = 'done' AND e.mock_id IS NOT NULL""",
+        (telegram_id, telegram_id),
+    )
+    return {r["mock_id"] for r in rows}
 
 
 # ---------- Savollar ----------
@@ -941,9 +1048,9 @@ async def grants_since(days: int = 30):
 
 
 async def count_exams_by_kind() -> dict:
-    """Admin testlari soni: {"speaking": n, "writing": m} (shaxsiy testlarsiz)."""
+    """Eski (mockka kirmagan) admin testlari soni: {"speaking": n, "writing": m}."""
     rows = await _fetchall("SELECT COALESCE(kind, 'speaking') AS kind, COUNT(*) AS c FROM exams "
-                           "WHERE owner_id IS NULL GROUP BY 1")
+                           "WHERE owner_id IS NULL AND mock_id IS NULL GROUP BY 1")
     return {r["kind"]: r["c"] for r in rows}
 
 
@@ -955,26 +1062,40 @@ async def premium_history(telegram_id: int, limit: int = 5):
 
 
 async def count_checks(telegram_id: int, kind: str, since: str | None = None) -> int:
-    """Sarflangan limit (kind: speaking | writing): yakunlangan tekshiruvlar + o'zi yaratgan shaxsiy testlar.
-    O'zi yaratgan testdagi tekshiruvlar SANALMAYDI (test yaratilganda bir marta limit olingan).
+    """Sarflangan limit (kind: speaking | writing) - MOCK bo'yicha: davrda ochilgan har bir mock 1 ta (uning
+    qismlari, full mock va qayta ishlashlar qo'shimcha olinmaydi). Mockga kirmagan eski testlarda - har
+    tekshiruv 1 ta; o'zi yaratgan (eski) shaxsiy testlar - yaratilganda 1 ta.
     since berilsa (UTC "YYYY-MM-DD HH:MM:SS") - shu vaqtdan beri, aks holda shu kalendar oyda (UTC+5)."""
     table = "attempts" if kind == "speaking" else "writing_submissions"
-
-    def period(col: str) -> str:
-        return (f"{col} >= ?" if since else
-                f"strftime('%Y-%m', {col}, '+5 hours') = strftime('%Y-%m', 'now', '+5 hours')")
-
     extra = (since,) if since else ()
     row = await _fetchone(
         f"""SELECT
-              (SELECT COUNT(*) FROM {table} t LEFT JOIN exams e ON e.id = t.exam_id
+              (SELECT COUNT(DISTINCT CASE WHEN e.mock_id IS NOT NULL THEN 'm' || e.mock_id ELSE 'x' || t.id END)
+                 FROM {table} t LEFT JOIN exams e ON e.id = t.exam_id
                 WHERE t.telegram_id = ? AND t.status = 'done'
-                  AND (e.owner_id IS NULL OR e.owner_id != t.telegram_id) AND {period('t.created_at')})
+                  AND (e.owner_id IS NULL OR e.owner_id != t.telegram_id) AND {_period('t.created_at', since)})
             + (SELECT COUNT(*) FROM exams x
-                WHERE x.owner_id = ? AND COALESCE(x.kind, 'speaking') = ? AND {period('x.created_at')}) AS c""",
+                WHERE x.owner_id = ? AND COALESCE(x.kind, 'speaking') = ? AND {_period('x.created_at', since)}) AS c""",
         (telegram_id, *extra, telegram_id, kind, *extra),
     )
     return row["c"]
+
+
+def _period(col: str, since: str | None) -> str:
+    return (f"{col} >= ?" if since else
+            f"strftime('%Y-%m', {col}, '+5 hours') = strftime('%Y-%m', 'now', '+5 hours')")
+
+
+async def mock_used(telegram_id: int, kind: str, mock_id: int, since: str | None = None) -> bool:
+    """Bu mock shu davrda allaqachon ochilganmi (limit olingan) - qayta ishlash / boshqa qismi bepul."""
+    table = "attempts" if kind == "speaking" else "writing_submissions"
+    row = await _fetchone(
+        f"""SELECT 1 AS ok FROM {table} t JOIN exams e ON e.id = t.exam_id
+            WHERE t.telegram_id = ? AND t.status = 'done' AND e.mock_id = ? AND {_period('t.created_at', since)}
+            LIMIT 1""",
+        (telegram_id, mock_id, *((since,) if since else ())),
+    )
+    return bool(row)
 
 
 async def get_stats() -> dict:
