@@ -34,7 +34,7 @@ import grader
 import report
 import roles
 import writing
-from access import check_access, get_plan, usage_block, usage_text
+from access import REDO_MSG, already_done, check_access, done_parts, get_plan, usage_block, usage_text
 from config import EXAM_LANGUAGE, WEBAPP_URL, is_admin, is_owner
 from languages import LANGUAGES
 from parts import WRITING_PARTS, part_info, parts_for, speaking_times
@@ -348,8 +348,8 @@ async def _mocks_view(user_id: int, page: int = 0):
         "🔥 <b>Full mock</b> — hammasi ketma-ket; vaqtingiz kam bo'lsa — istalgan qismni alohida ishlang.",
     ]
     if config.PREMIUM_ENABLED and not is_admin(user_id):
-        lines.append(f"\n💼 {await usage_text(user_id)}\n<i>Mockni ochsangiz, limitdan 1 ta olinadi — uning qismlarini "
-                     "shu davrda qayta-qayta ishlashingiz mumkin.</i>")
+        lines.append(f"\n💼 {await usage_text(user_id)}\n<i>Mockni ochsangiz, limitdan 1 ta olinadi. Har bir qism "
+                     "<b>bir marta</b> ishlanadi — ishlangan mockni qayta ishlab bo'lmaydi.</i>")
     if not mocks:
         lines.append("\nHozircha tayyor mock yo'q — tez orada qo'shiladi.")
         return "\n".join(lines), None
@@ -443,8 +443,9 @@ async def mock_speaking(callback: CallbackQuery, state: FSMContext):
     if not allowed:
         return await callback.answer(reason, show_alert=True)
     await state.clear()
+    done = (await done_parts(callback.from_user.id, m["id"]))["speaking"]
     rows, lines = [], [f"🎙 <b>{e(m['title'])} — {SPEAKING_NAME}</b>", "━━━━━━━━━━━━━━━━"]
-    full = all(p in m["speaking"] for p in SP_PARTS)
+    full = all(p in m["speaking"] for p in SP_PARTS) and not done
     if full:
         lines.append("🔥 <b>Full mock</b> — Part 1.1 → 1.2 → 2 → 3 ketma-ket (~10 daqiqa), xuddi imtihondagidek. "
                      "Oxirida umumiy ball (75 lik) va har qism tahlili.")
@@ -454,8 +455,12 @@ async def mock_speaking(callback: CallbackQuery, state: FSMContext):
         if p in m["speaking"]:
             info = part_info("speaking", p)
             lines.append(f"• <b>Part {p}</b> — {e(info['about'])}")
-    parts = [_webapp(f"Part {p}", f"exam={m['speaking'][p]}") for p in SP_PARTS if p in m["speaking"]]
+    parts = [InlineKeyboardButton(text=f"✅ Part {p}", callback_data="mk_done") if p in done
+             else _webapp(f"Part {p}", f"exam={m['speaking'][p]}") for p in SP_PARTS if p in m["speaking"]]
     rows += [parts[i:i + 2] for i in range(0, len(parts), 2)]
+    if done:
+        lines.append("\n✅ — ishlangan qismlar. Har qism <b>bir marta</b> ishlanadi; Full mock faqat hech bir qismi "
+                     "ishlanmagan mockda bo'ladi.")
     rows.append([InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"mko:{m['id']}")])
     lines.append("\n🎧 Tinch joyda bo'ling va mikrofonga ruxsat bering.")
     await callback.message.edit_text("\n".join(lines), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
@@ -474,7 +479,14 @@ async def mock_writing(callback: CallbackQuery, state: FSMContext):
     if not allowed:
         return await callback.answer(reason, show_alert=True)
     await state.clear()
+    done = (await done_parts(callback.from_user.id, m["id"]))["writing"]
     B = InlineKeyboardButton
+
+    def wbtn(label: str, mode: str) -> InlineKeyboardButton:
+        if mode in done:
+            return B(text=f"✅ {label}", callback_data="mk_done")
+        return B(text=label, callback_data=f"wt:{wid}:{mode}" if mode else f"wt:{wid}")
+
     lines = [f"✍️ <b>{e(m['title'])} — {WRITING_NAME}</b>", "━━━━━━━━━━━━━━━━"]
     if m["writing"]["part"] == "full":
         lines += [
@@ -483,16 +495,23 @@ async def mock_writing(callback: CallbackQuery, state: FSMContext):
             f"• <b>1-qism</b> — {e(WRITING_PARTS['1']['about'])} (~{WRITING_PARTS['1']['time']} daqiqa)",
             f"• <b>2-qism</b> — {e(WRITING_PARTS['2']['about'])} (~{WRITING_PARTS['2']['time']} daqiqa)",
         ]
-        rows = [[B(text="🔥 Full mock — 1 va 2-qism", callback_data=f"wt:{wid}:full")],
-                [B(text="1-qism — 2 xat", callback_data=f"wt:{wid}:1"),
-                 B(text="2-qism — blog", callback_data=f"wt:{wid}:2")]]
+        rows = [[wbtn("1-qism — 2 xat", "1"), wbtn("2-qism — blog", "2")]]
+        if not done:
+            rows.insert(0, [wbtn("🔥 Full mock — 1 va 2-qism", "full")])
+        else:
+            lines.append("\n✅ — ishlangan qismlar. Har qism <b>bir marta</b> ishlanadi.")
     else:
         info = part_info("writing", m["writing"]["part"])
         lines.append(f"<b>{e(info['name'])}</b>")
-        rows = [[B(text="✍️ Boshlash", callback_data=f"wt:{wid}")]]
+        rows = [[wbtn("✍️ Boshlash", "")]] if not done else []
     rows.append([B(text="⬅️ Orqaga", callback_data=f"mko:{m['id']}")])
     await callback.message.edit_text("\n".join(lines), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
     await callback.answer()
+
+
+@router.callback_query(F.data == "mk_done")
+async def mock_part_done(callback: CallbackQuery):
+    await callback.answer(REDO_MSG, show_alert=True)
 
 
 # ---------- Writing ----------
@@ -535,8 +554,10 @@ async def writing_topic(callback: CallbackQuery, state: FSMContext):
     allowed, reason = await check_access(callback.from_user.id, "writing", exam=exam)
     if not allowed:
         return await callback.answer(reason, show_alert=True)
-    await state.clear()
     part = _wmode(exam, bits[2] if len(bits) > 2 else None)
+    if await already_done(callback.from_user.id, exam, part):
+        return await callback.answer(REDO_MSG, show_alert=True)
+    await state.clear()
     mode = part if part != exam["part"] else ""
     info = part_info("writing", part)
     letters = f", {LANG['lang_adj'].lower()} harflar paneli" if LANG.get("special_chars") else ""
@@ -584,6 +605,8 @@ async def writing_chat_start(callback: CallbackQuery, state: FSMContext):
     if not allowed:
         return await callback.answer(reason, show_alert=True)
     part = _wmode(exam, bits[2] if len(bits) > 2 else None)
+    if await already_done(callback.from_user.id, exam, part):
+        return await callback.answer(REDO_MSG, show_alert=True)
     await state.clear()
     await state.set_state(WritingAnswer.text)
     await state.update_data(exam_id=exam["id"], part=part, step=0, texts={}, pending=None, started=time.time())

@@ -187,14 +187,21 @@ async def _ask_groq(system: str, user: str, json_mode: bool) -> str:
         return body["choices"][0]["message"]["content"] or ""
 
 
+# temperature faqat eski modellarda qabul qilinadi (Claude Haiku 5.5 va yangilarida standart bo'lmagan qiymat - 400)
+_SAMPLING_MODELS = ("claude-haiku-4-5", "claude-sonnet-4-5", "claude-sonnet-4-6", "claude-opus-4-5", "claude-opus-4-6")
+
+
 async def _ask_claude(system: str, user: str) -> str:
     payload = {
         "model": CLAUDE_MODEL,
-        "max_tokens": 3000,
-        "temperature": 0.2,
+        # Haiku 5.5 avval o'ylaydi (fikrlash tokenlari ham shu chegaraga kiradi) - javob kesilib qolmasin
+        "max_tokens": 16000,
         "system": system,
         "messages": [{"role": "user", "content": user}],
     }
+    if CLAUDE_MODEL.startswith(_SAMPLING_MODELS):
+        payload["temperature"] = 0.2
+        payload["max_tokens"] = 3000
     async with get_session().post(
         CLAUDE_URL,
         json=payload,
@@ -203,11 +210,14 @@ async def _ask_claude(system: str, user: str) -> str:
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
         },
-        timeout=aiohttp.ClientTimeout(total=90),
+        timeout=aiohttp.ClientTimeout(total=120),
     ) as resp:
         body = await resp.json(content_type=None)
         if resp.status != 200:
             raise GraderError(resp.status, str(body)[:500])
+        if body.get("stop_reason") == "refusal":
+            raise GraderError(503, f"claude refusal: {body.get('stop_details')}")
+        # javobda fikrlash bloklari ham bo'ladi - faqat matn olinadi
         return "".join(b.get("text", "") for b in body.get("content", []) if b.get("type") == "text")
 
 

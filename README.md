@@ -16,6 +16,7 @@ Telegram bot: ko'p darajali (multilevel) imtihon uchun Speaking va Writing'ni AI
 | `ADMIN_IDS` | tavsiya | Admin Telegram ID'lari, vergul bilan (ID: @userinfobot) |
 | `EXAM_LANGUAGE` | yo'q | `tr` (standart) yoki `en` |
 | `GRADER_PROVIDER` | yo'q | `groq` (standart) yoki `claude` (`ANTHROPIC_API_KEY` ham kerak) |
+| `CLAUDE_MODEL` | yo'q | `claude-haiku-5-5` (standart, eng arzon) |
 | `TURSO_DATABASE_URL` | tavsiya | `libsql://<baza>.turso.io` — berilsa, ma'lumotlar Turso'da saqlanadi (deploy/restartda o'chmaydi, disk kerak emas) |
 | `TURSO_AUTH_TOKEN` | Turso bilan | Turso token (`turso db tokens create <baza>`) |
 | `DB_PATH` | disk bilan | `/var/data/speakbot.db` (Disk mount: `/var/data`) |
@@ -84,7 +85,8 @@ O'quvchilar endi o'zi test yaratmaydi; mockka kirmagan eski testlar «🗂 Eski 
 | 👑 VIP | 100 | 100 | 70 000 so'm / 30 kun | 2 ekspert baholashi |
 
 Limit **mock** bilan o'lchanadi: mockning Konuşma (yoki Yazma) qismini birinchi marta ishlash — 1 ta; shu davrda
-uning Full mock'i, alohida qismlari va qayta ishlash bepul. Bepul limit kalendar oyda (O'zbekiston vaqti, 1-sanada) yangilanadi; pullik limit — obunaning har 30 kunlik
+uning qolgan qismlari bepul. Har qism bir marta ishlanadi: ishlangan qism ✅ bilan yopiladi, biror qismi
+ishlangan bo'limda Full mock chiqmaydi (adminlarga cheklov yo'q). Bepul limit kalendar oyda (O'zbekiston vaqti, 1-sanada) yangilanadi; pullik limit — obunaning har 30 kunlik
 davrida (60 kunga berilsa — ikki davr). Limit va narxlar admin paneldagi **⚙️ Sozlamalar** orqali o'zgartiriladi.
 `PREMIUM_ENABLED=0` bo'lsa hamma cheksiz.
 

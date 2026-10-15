@@ -1,7 +1,7 @@
 """Tariflar: Bepul / Standard / Pro / VIP.
 
 Limit Konuşma va Yazma uchun ALOHIDA, MOCK bilan hisoblanadi (mockni ochish - 1 ta; uning qismlari va
-qayta ishlash shu davrda bepul):
+qolgan qismlari shu davrda bepul; har qism bir marta ishlanadi):
   🆓 Bepul    — oyiga 2 Konuşma + 2 Yazma (kalendar oy, O'zbekiston vaqti)
   ⭐ Standard — 30 + 30, 30 000 so'm / 30 kun
   💎 Pro      — 60 + 60, 50 000 so'm / 30 kun, 2 ekspert baholashi

@@ -133,7 +133,8 @@ async def premium_info(message: Message, state: FSMContext):
     lines += [
         "━━━━━━━━━━━━━━━━",
         "ℹ️ Limit <b>mock</b> bilan o'lchanadi: mockning Konuşma (yoki Yazma) qismini birinchi marta ishlaganda — "
-        "1 ta. Shu davrda uning Full mock'i, alohida qismlari va qayta ishlash <b>bepul</b>. "
+        "1 ta; uning qolgan qismlari shu davrda bepul. Har qism <b>bir marta</b> ishlanadi — ishlangan mockni qayta "
+        "ishlab bo'lmaydi. "
         "<i>2 ekspert</i> — ishingizni ikki mustaqil AI ekspert baholaydi, ball aniqroq.",
         "",
         f"📅 <b>Muddat:</b> pullik tarif to'lov qilingan kundan boshlab <b>{plans.PERIOD_DAYS} kun</b> amal qiladi — "
