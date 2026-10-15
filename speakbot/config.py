@@ -53,6 +53,8 @@ if GRADER_PROVIDER == "claude" and not ANTHROPIC_API_KEY:
 # Nechta mustaqil "ekspert" baholaydi (rasmiy imtihonda - 2 ta, ballar o'rtachasi olinadi).
 # 2 qilinsa natija barqarorroq, lekin AI xarajati 2 baravar ko'payadi.
 RATERS = max(1, min(3, int(os.getenv("RATERS", "1"))))
+# Bir vaqtda nechta AI so'rovi (Groq bepul rejasi daqiqalik limiti uchun; pullik rejada oshirish mumkin)
+GRADER_CONCURRENCY = max(1, min(10, int(os.getenv("GRADER_CONCURRENCY", "2"))))
 
 # Groq Whisper - nutqni matnga aylantiradi.
 STT_MODEL = os.getenv("STT_MODEL", "whisper-large-v3-turbo")
