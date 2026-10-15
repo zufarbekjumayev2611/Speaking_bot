@@ -1,5 +1,6 @@
-"""Foydalanuvchi tekshiruv olishi mumkinmi: tarif bo'yicha Konuşma va Yazma limiti ALOHIDA.
-Bepul - kalendar oy; pullik - obunaning joriy 30 kunlik davri. Adminlar - cheklovsiz."""
+"""Foydalanuvchi tekshiruv olishi mumkinmi: tarif bo'yicha Konuşma va Yazma limiti ALOHIDA, MOCK bilan o'lchanadi.
+Mockni birinchi marta ishlaganda limitdan 1 ta olinadi; shu davrda uning qismlari, full mock va qayta
+ishlashlar bepul. Bepul - kalendar oy; pullik - obunaning joriy 30 kunlik davri. Adminlar - cheklovsiz."""
 from datetime import datetime, timedelta, timezone
 
 import config
@@ -55,14 +56,25 @@ def is_own(exam: dict | None, user_id: int) -> bool:
     return bool(exam and exam.get("owner_id") == user_id)
 
 
+async def mock_opened(user_id: int, kind: str, exam: dict | None) -> bool:
+    """Test mockning qismi va bu mock shu davrda allaqachon ochilgan (limit olingan) bo'lsa - True."""
+    if not exam or not exam.get("mock_id"):
+        return False
+    prem = await db.get_premium(user_id)
+    start, _ = period_bounds(prem["until"] if prem else None)
+    return await db.mock_used(user_id, kind, exam["mock_id"], start)
+
+
 async def check_access(user_id: int, kind: str, _extra: int = 0, exam: dict | None = None) -> tuple[bool, str]:
     """(ruxsat bormi, ruxsat yo'q bo'lsa foydalanuvchiga xabar). kind: speaking | writing.
-    exam - o'quvchining o'z testi bo'lsa, limit tekshirilmaydi."""
+    exam - shu davrda ochilgan mockning qismi (yoki o'quvchining eski shaxsiy testi) bo'lsa, limit olinmaydi."""
     if is_admin(user_id):
         return True, ""
     if user_id in config.BLOCKED_IDS:
         return False, "Siz botdan foydalanishdan chetlatilgansiz. Savollar bo'lsa admin bilan bog'laning."
     if not PREMIUM_ENABLED or is_own(exam, user_id):
+        return True, ""
+    if _extra == 0 and await mock_opened(user_id, kind, exam):
         return True, ""
     u = await usage(user_id, kind)
     if u["limit"] is None:
@@ -78,7 +90,7 @@ async def check_access(user_id: int, kind: str, _extra: int = 0, exam: dict | No
     else:
         when = f"Obunangiz {_local_date(u['until'])} gacha."
     upsell = " Ko'proq kerak bo'lsa — «🚀 Tarifni yaxshilash»." if u["plan"] != "vip" else ""
-    return False, f"{label} limiti tugadi ({used}/{u['limit']}). {when}{upsell}"
+    return False, f"{label} limiti tugadi ({used}/{u['limit']} mock). {when}{upsell}"
 
 
 async def acquire_check(user_id: int, kind: str) -> tuple[bool, str]:
@@ -96,6 +108,17 @@ async def acquire_check(user_id: int, kind: str) -> tuple[bool, str]:
     return allowed, reason
 
 
+async def reserve(user_id: int, kind: str, exam: dict | None) -> tuple[bool, str, bool]:
+    """Baholashdan oldin: (ruxsat, sabab, joy band qilindimi). Shu davrda ochilgan mock (yoki o'z testi) -
+    limit olinmaydi (band qilinmaydi). Band qilingan bo'lsa, baholashdan keyin release_check() shart."""
+    if is_admin(user_id) or is_own(exam, user_id) or (PREMIUM_ENABLED and await mock_opened(user_id, kind, exam)):
+        if user_id in config.BLOCKED_IDS:
+            return False, "Siz botdan foydalanishdan chetlatilgansiz.", False
+        return True, "", False
+    allowed, reason = await acquire_check(user_id, kind)
+    return allowed, reason, allowed
+
+
 def release_check(user_id: int, kind: str):
     key = (user_id, kind)
     n = _pending.get(key, 0) - 1
@@ -106,12 +129,12 @@ def release_check(user_id: int, kind: str):
 
 
 async def usage_text(user_id: int) -> str:
-    """«🎙 Konuşma: 3/30 • ✍️ Yazma: 1/30» + qachon yangilanishi (profil, tarif sahifasi, admin kartasi uchun)."""
+    """«🎙 Konuşma: 3/30 mock • ✍️ Yazma: 1/30 mock» + qachon yangilanishi (profil, tarif sahifasi, admin kartasi uchun)."""
     parts, info = [], None
     for kind, icon in (("speaking", "🎙"), ("writing", "✍️")):
         info = await usage(user_id, kind)
         lim = "cheksiz" if info["limit"] is None else str(info["limit"])
-        parts.append(f"{icon} {plans.KIND_LABEL[kind]}: <b>{info['used']}/{lim}</b>")
+        parts.append(f"{icon} {plans.KIND_LABEL[kind]}: <b>{info['used']}/{lim}</b> mock")
     text = " • ".join(parts)
     if info["plan"] == "free":
         return f"Bu oy: {text}"
@@ -126,7 +149,7 @@ async def usage_block(user_id: int) -> str:
     for kind, icon in (("speaking", "🎙"), ("writing", "✍️")):
         info = await usage(user_id, kind)
         lim = "∞" if info["limit"] is None else str(info["limit"])
-        lines.append(f"{icon} {plans.KIND_LABEL[kind]}  {plans.bar(info['used'], info['limit'])}  <b>{info['used']}/{lim}</b>")
+        lines.append(f"{icon} {plans.KIND_LABEL[kind]}  {plans.bar(info['used'], info['limit'])}  <b>{info['used']}/{lim}</b> mock")
     if info["plan"] == "free":
         lines.append("🔄 Limit har oyning 1-sanasida yangilanadi")
     elif info["next_reset"]:

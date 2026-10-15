@@ -53,8 +53,20 @@ Kalitni almashtirish uchun Render'da `USERS_API_KEY` ni o'zgartirib, qayta deplo
 - **Admin** — botda qo'shilganlar. Boss har bir admin uchun bo'limlarni yoqadi/yopadi: Testlar, Foydalanuvchilar,
   Premium, Natijalar, Xabar yuborish, Statistika. Yopiq bo'lim tugmalari adminga ko'rinmaydi, eski tugma bosilsa
   ham markaziy filtr (`roles.py`) to'xtatadi.
-- Testlar va foydalanuvchilar ro'yxati 10 tadan chiqadi (qolgani — sahifalab yoki 🔎 qidiruv); o'quvchi qism
-  ro'yxati ham 10 tadan + «🎲 Tasodifiy test», katalog xotirada keshlanadi (yuzlab test bo'lsa ham yengil).
+- Mocklar va foydalanuvchilar ro'yxati 10 tadan chiqadi (qolgani — sahifalab yoki 🔎 qidiruv); o'quvchining
+  mocklar ro'yxati ham 10 tadan, katalog xotirada keshlanadi (yuzlab mock bo'lsa ham yengil).
+
+## 📚 Mocklar
+
+O'quvchi menyusida bitta **«📚 Mocklar»** tugmasi: mock → 🎙 Konuşma | ✍️ Yazma.
+- **Konuşma:** 🔥 *Full mock* — Part 1.1 → 1.2 → 2 → 3 ketma-ket (natija: qismlar yig'indisi /21 va taxminiy
+  standart ball /75), yoki istalgan qismni alohida (Part 1.1, 1.2, 2, 3).
+- **Yazma:** 🔥 *Full mock* (1 va 2-qism, 60 daqiqa, /75), yoki faqat 1-qism (2 xat) / 2-qism (blog).
+
+Admin: «📚 Mocklar» → «➕ Yangi mock» (raqami avtomatik, ichida 5 ta bo'sh qism) → qismni bosib savol /
+topshiriq qo'shadi. Tayyor qismlar darhol ko'rinadi; Full mock 4 ta Konuşma qismi tayyor bo'lganda chiqadi.
+Birinchi ishga tushishda 5 ta namunaviy full mock yaratiladi (Part 1.2 va 2 rasmsiz — rasmni admin qo'shadi).
+O'quvchilar endi o'zi test yaratmaydi; mockka kirmagan eski testlar «🗂 Eski testlar» arxivida.
 
 ## Lokal ishga tushirish
 
@@ -71,15 +83,15 @@ Kalitni almashtirish uchun Render'da `USERS_API_KEY` ni o'zgartirib, qayta deplo
 | 💎 Pro | 60 | 60 | 50 000 so'm / 30 kun | 2 ekspert baholashi |
 | 👑 VIP | 100 | 100 | 70 000 so'm / 30 kun | 2 ekspert baholashi |
 
-Limit = kredit: **test topshirish** yoki **o'z testini yaratish** — 1 limit; o'zi yaratgan testni o'quvchi
-**cheksiz** topshiradi (shaxsiy test 2 soat turadi, bir vaqtda ko'pi bilan 3 ta). Bepul limit kalendar oyda (O'zbekiston vaqti, 1-sanada) yangilanadi; pullik limit — obunaning har 30 kunlik
+Limit **mock** bilan o'lchanadi: mockning Konuşma (yoki Yazma) qismini birinchi marta ishlash — 1 ta; shu davrda
+uning Full mock'i, alohida qismlari va qayta ishlash bepul. Bepul limit kalendar oyda (O'zbekiston vaqti, 1-sanada) yangilanadi; pullik limit — obunaning har 30 kunlik
 davrida (60 kunga berilsa — ikki davr). Limit va narxlar admin paneldagi **⚙️ Sozlamalar** orqali o'zgartiriladi.
 `PREMIUM_ENABLED=0` bo'lsa hamma cheksiz.
 
 **To'lov qo'lda:** 👥 Foydalanuvchilar → foydalanuvchini tanlang (yoki 💎 Premium → ➕ Premium berish) → tarif (Standard/Pro/VIP) → muddat (30/90/180/365 yoki istalgan kun) → to'lov izohi. Foydalanuvchiga xabar boradi; faol obunaga qayta berilsa, muddat uzayadi. Tugashiga 3 kun qolganda bot foydalanuvchiga o'zi eslatadi.
 
 **Admin panel:**
-- 📚 Testlar: yaratish, nomini o'zgartirish, nusxalash, ochish/yopish, o'chirish, «hamma testlarni o'chirish» (tasdiqlash bilan).
+- 📚 Mocklar: yaratish, qismlarini to'ldirish va tahrirlash, nomini o'zgartirish, o'chirish (tasdiqlash bilan).
 - 👥 Foydalanuvchilar: ro'yxat/qidiruv, karta (tarif, oylik tekshiruvlar, oxirgi natijalar, premium tarixi), premium berish/bekor qilish, 🚫 bloklash.
 - 📣 Xabar yuborish: hammaga yoki tarif bo'yicha (ko'rinish + tasdiqlash, fon rejimida yuboriladi).
 - 📊 Natijalar (sahifalab), 📈 Statistika (faollik, tariflar, tekshiruvlar), 👮 Adminlar (`ADMIN_IDS` — asosiy adminlar, o'chirib bo'lmaydi), ⚙️ Sozlamalar (limitlar, to'lov matni).

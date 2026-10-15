@@ -379,6 +379,42 @@ async def grade_speaking(answers: list[dict], part: str | None, raters: int | No
     return _combine("speaking", part, p["name"], [comp])
 
 
+def _unique_mistakes(comps: list[dict]) -> list:
+    """Qismlardagi xatolar - takrorlarsiz (bir xil so'z bir necha qismda xato qilingan bo'lishi mumkin)."""
+    seen, out = set(), []
+    for c in comps:
+        for m in c.get("mistakes") or []:
+            key = _norm(m.get("wrong"))
+            if key not in seen:
+                seen.add(key)
+                out.append(m)
+    return out
+
+
+def combine_mock(parts: list[dict], part_name: str = "Full mock — Konuşma") -> dict:
+    """Full mock (Konuşma): har qismning natijasi bitta umumiy natijaga - qism ballari yig'indisi
+    (1.1 + 1.2 + 2 + 3 = 21) va 75 ballik TAXMINIY standart ball."""
+    comps = []
+    for r in parts:
+        for c in r.get("components") or []:
+            comps.append({**c, "name": r.get("part_name") or c.get("name")})
+    raw = sum(float(c.get("band") or 0) for c in comps)
+    max_raw = sum(c.get("max") or 0 for c in comps)
+    total = standard_score(raw, max_raw) if max_raw else 0
+    tips = []
+    for i in range(MAX_TIPS):
+        for c in comps:
+            t = (c.get("tips") or [])[i:i + 1]
+            if t and t[0] not in tips:
+                tips.append(t[0])
+    return {
+        "kind": "speaking", "part": "mock", "part_name": part_name, "components": comps,
+        "raw": raw, "max_raw": max_raw, "total": total, "max_total": MAX_SCORE, "level": level_for(total),
+        "approx": True, "mistakes": _unique_mistakes(comps)[:15],
+        "tips": tips[:MAX_TIPS_TOTAL],
+    }
+
+
 # ---------------------------------------------------------------- writing
 
 async def grade_writing(tasks, texts: dict, part: str | None, raters: int | None = None) -> dict:
@@ -451,6 +487,7 @@ def result_message(title: str, part_name: str, r: dict) -> str:
         lines.append(
             f"🎯 Ekspert bahosi: <b>{float(r['raw']):g}/{r['max_raw']}</b> → standart ball "
             f"<b>{r['total']}/{r.get('max_total', MAX_SCORE)}</b> ({_e(r['level'])})"
+            + (" — taxminiy" if r.get("approx") else "")
         )
     elif many:
         lines.append(f"🎯 Qism bo'yicha jami: <b>{float(r['raw']):g}/{r['max_raw']}</b>")

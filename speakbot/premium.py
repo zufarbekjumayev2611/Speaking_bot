@@ -127,12 +127,13 @@ async def premium_info(message: Message, state: FSMContext):
         if plans.raters_for(p) > 1:
             extra.append("2 ekspert baholashi")
         if plans.per_mock(p):
-            extra.append(f"≈ {plans.money(plans.per_mock(p))} / test")
+            extra.append(f"≈ {plans.money(plans.per_mock(p))} / mock")
         lines += [f"{head}{mark}", "   " + " • ".join(extra), ""]
     lines += [
         "━━━━━━━━━━━━━━━━",
-        "ℹ️ Har bir test topshirish yoki <b>o'z testingizni yaratish</b> — 1 limit. O'zingiz yaratgan testni "
-        "<b>cheksiz</b> topshirasiz. <i>2 ekspert</i> — ishingizni ikki mustaqil AI ekspert baholaydi, ball aniqroq.",
+        "ℹ️ Limit <b>mock</b> bilan o'lchanadi: mockning Konuşma (yoki Yazma) qismini birinchi marta ishlaganda — "
+        "1 ta. Shu davrda uning Full mock'i, alohida qismlari va qayta ishlash <b>bepul</b>. "
+        "<i>2 ekspert</i> — ishingizni ikki mustaqil AI ekspert baholaydi, ball aniqroq.",
         "",
         f"📌 Sizning tarifingiz: <b>{e(plans.name(plan))}</b>" + (f" — {_local(prem['until'])} gacha" if prem else ""),
         await usage_block(uid),

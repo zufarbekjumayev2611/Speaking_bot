@@ -266,7 +266,9 @@ const $ = (id) => document.getElementById(id);
 const SCREENS = ["loading", "error", "intro", "question", "result"];
 const show = (name) => SCREENS.forEach((s) => ($(s).hidden = s !== name));
 const initData = tg?.initData || "";
-const examId = new URLSearchParams(location.search).get("exam");
+const params = new URLSearchParams(location.search);
+const examId = params.get("exam");
+const mockId = params.get("mock");   // Full mock: Part 1.1 -> 1.2 -> 2 -> 3 ketma-ket
 
 let exam = null;          // {attempt_id, title, questions}
 let stream = null;        // mikrofon oqimi (butun imtihon davomida bitta)
@@ -411,10 +413,10 @@ function debateTable(d) {
 // ---------- 1. Yuklash ----------
 async function load() {
   if (!initData) return fail("Bu sahifani bot ichidagi tugma orqali oching.");
-  if (!examId) return fail("Imtihon tanlanmagan. Botga qaytib, imtihonni qayta tanlang.");
+  if (!examId && !mockId) return fail("Imtihon tanlanmagan. Botga qaytib, imtihonni qayta tanlang.");
   show("loading");
   try {
-    exam = await api(`/api/exam/${encodeURIComponent(examId)}`);
+    exam = await api(mockId ? `/api/mock/${encodeURIComponent(mockId)}` : `/api/exam/${encodeURIComponent(examId)}`);
   } catch (e) {
     return fail(e.message, retryable(e) ? load : null);
   }
@@ -423,6 +425,7 @@ async function load() {
   if (exam.flag) $("langFlag").textContent = exam.flag;
   if (exam.answer_rule) $("langRule").textContent = exam.answer_rule;
   const total = exam.questions.reduce((s, q) => s + q.prep_sec + q.answer_sec, 0);
+  if (mockId) $("heroBadge").textContent = "🔥 Full mock";
   const partLine = exam.part_name ? `${exam.part_name} • ` : "";
   $("examMeta").textContent = `${partLine}${exam.questions.length} ta savol, taxminan ${Math.ceil(total / 60)} daqiqa`;
   show("intro");
@@ -449,7 +452,9 @@ function askQuestion() {
   const q = exam.questions[index];
   $("steps").innerHTML = exam.questions
     .map((_, i) => `<i class="${i < index ? "done" : i === index ? "now" : ""}"></i>`).join("");
-  $("qLabel").textContent = `${index + 1}-savol, jami ${exam.questions.length} ta`;
+  const prev = exam.questions[index - 1];
+  if (prev && prev.part !== q.part) haptic("warning");   // yangi qism boshlandi
+  $("qLabel").textContent = (q.part_name ? `${q.part_name} • ` : "") + `${index + 1}-savol, jami ${exam.questions.length} ta`;
   const debate = parseDebate(q.text);
   $("qText").textContent = debate ? debate.title : q.text;
   $("qTable").hidden = !debate;
@@ -500,7 +505,7 @@ async function record(q) {
   recorder.onstop = () => {
     const blob = new Blob(chunks, { type: recorder.mimeType || mime || "audio/webm" });
     const duration = (Date.now() - startedAt) / 1000;
-    const a = { qId: q.id, blob, duration, done: false };
+    const a = { qId: q.id, attemptId: q.attempt_id || exam.attempt_id, blob, duration, done: false };
     a.promise = uploadAnswer(a);
     a.promise.catch(() => {});  // xato yakunlashda (finish) ko'rsatiladi va qayta yuboriladi
     answers.push(a);
@@ -560,7 +565,7 @@ async function uploadAnswer(a) {
   for (let i = 0; ; i++) {
     try {
       const form = new FormData();
-      form.append("attempt_id", exam.attempt_id);
+      form.append("attempt_id", a.attemptId);
       form.append("question_id", a.qId);
       form.append("audio", a.blob, "answer");
       form.append("duration", a.duration.toFixed(1));
@@ -597,11 +602,17 @@ async function finish() {
   }
   $("loadingText").textContent = "Sun'iy intellekt baholamoqda… (10–20 soniya)";
   try {
-    const result = await api("/api/finish", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ attempt_id: exam.attempt_id }),
-    });
+    const result = mockId
+      ? await api("/api/mock_finish", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mock_id: Number(mockId), attempt_ids: exam.attempt_ids }),
+        })
+      : await api("/api/finish", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ attempt_id: exam.attempt_id }),
+        });
     showResult(result);
   } catch (e) {
     fail(e.message, retryable(e) ? finish : null);
@@ -615,6 +626,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<
 function showResult(r) {
   tg?.disableClosingConfirmation?.();
   haptic("success");
+  if ((r.components || []).length > 1) return showMockResult(r);
   const c = (r.components && r.components[0]) || {};
   $("resTitle").textContent = exam.part_name ? `${exam.title} • ${exam.part_name}` : exam.title;
   $("resBand").textContent = c.band ?? "–";
@@ -632,6 +644,34 @@ function showResult(r) {
     .map(([k, label]) => `<div class="mistake"><b>${label}</b><div class="note">${esc(notes[k])}</div></div>`)
     .join("");
   const mistakes = c.mistakes || r.mistakes || [];
+  $("resMistakesTitle").textContent = mistakes.length ? `Xatolar (${mistakes.length})` : "Xatolar";
+  $("resMistakesWrap").hidden = !mistakes.length;
+  $("resMistakes").innerHTML = mistakes.map((m) =>
+    `<div class="mistake"><span class="wrong">${esc(m.wrong)}</span> → <span class="right">${esc(m.correct)}</span>
+     <div class="note">${esc(m.note)}</div></div>`).join("");
+  const tips = r.tips || [];
+  $("resTipsWrap").hidden = !tips.length;
+  $("resTips").innerHTML = tips.map((t) => `<li>${esc(t)}</li>`).join("");
+  show("result");
+}
+
+// Full mock: umumiy (75 ballik, taxminiy) ball va har qism bo'yicha ball
+function showMockResult(r) {
+  tg?.disableClosingConfirmation?.();
+  haptic("success");
+  $("resTitle").textContent = `${exam.title} • Full mock`;
+  $("resBand").textContent = r.total ?? "–";
+  $("resBandMax").textContent = ` / ${r.max_total || 75}`;
+  $("resLevel").textContent = r.level || "";
+  $("resReason").hidden = true;
+  const pct = Math.round(100 * (Number(r.total) || 0) / (r.max_total || 75));
+  requestAnimationFrame(() => $("resRing").style.setProperty("--p", pct));
+  $("resRaw").textContent = `Qismlar yig'indisi: ${r.raw} / ${r.max_raw} • taxminiy standart ball`;
+  $("resSummary").textContent = "";
+  $("resBars").innerHTML = (r.components || []).map((c) =>
+    `<div class="mistake"><b>${esc(c.name)}: ${esc(c.band)} / ${esc(c.max)}</b> — ${esc(c.label)}
+     <div class="note">${esc(c.reason)}</div></div>`).join("");
+  const mistakes = r.mistakes || [];
   $("resMistakesTitle").textContent = mistakes.length ? `Xatolar (${mistakes.length})` : "Xatolar";
   $("resMistakesWrap").hidden = !mistakes.length;
   $("resMistakes").innerHTML = mistakes.map((m) =>

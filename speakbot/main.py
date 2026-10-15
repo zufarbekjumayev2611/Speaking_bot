@@ -22,6 +22,7 @@ from bot import router
 from broadcast import reminder_loop, router as broadcast_router
 from premium import BlockMiddleware, router as premium_router
 from config import BOT_MODE, BOT_TOKEN, PORT, WEBAPP_URL
+import mock_seed
 from fsm_storage import DbStorage
 from netclient import close_session, get_session
 from web import create_app
@@ -87,6 +88,10 @@ async def main():
     logging.info("Ma'lumotlar bazasi: %s", db.backend_name())
     await db.load_admins()
     await db.load_blocked()
+    try:
+        await mock_seed.ensure_seed()  # birinchi ishga tushishda 5 ta namunaviy mock
+    except Exception:
+        logging.exception("Namunaviy mocklarni yaratib bo'lmadi")
     bot = Bot(token=BOT_TOKEN)
     dp = build_dispatcher(bot)
     dp_ref.append(dp)

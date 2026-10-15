@@ -1,6 +1,7 @@
 """Tariflar: Bepul / Standard / Pro / VIP.
 
-Limit Konuşma va Yazma uchun ALOHIDA hisoblanadi:
+Limit Konuşma va Yazma uchun ALOHIDA, MOCK bilan hisoblanadi (mockni ochish - 1 ta; uning qismlari va
+qayta ishlash shu davrda bepul):
   🆓 Bepul    — oyiga 2 Konuşma + 2 Yazma (kalendar oy, O'zbekiston vaqti)
   ⭐ Standard — 30 + 30, 30 000 so'm / 30 kun
   💎 Pro      — 60 + 60, 50 000 so'm / 30 kun, 2 ekspert baholashi
@@ -56,9 +57,9 @@ def _count(n: int | None) -> str:
 
 
 def limits_text(plan: str) -> str:
-    """«30 Konuşma + 30 Yazma» (bepulda - «oyiga ...»)."""
+    """«30 Konuşma + 30 Yazma mock» (bepulda - «oyiga ...»)."""
     s, w = limit_for(plan, "speaking"), limit_for(plan, "writing")
-    text = f"{_count(s)} Konuşma + {_count(w)} Yazma"
+    text = f"{_count(s)} Konuşma + {_count(w)} Yazma mock"
     return f"oyiga {text}" if plan == "free" else text
 
 
@@ -83,7 +84,7 @@ def bar(used: int, limit: int | None, width: int = 10) -> str:
 
 
 def per_mock(plan: str) -> int | None:
-    """1 ta tekshiruv narxi (so'm) - tariflarni solishtirish uchun."""
+    """1 ta mock narxi (so'm) - tariflarni solishtirish uchun."""
     total = (limit_for(plan, "speaking") or 0) + (limit_for(plan, "writing") or 0)
     price = price_for(plan)
     return round(price / total) if price and total else None

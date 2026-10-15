@@ -279,9 +279,11 @@ function show(name) {
   if (name === "exam") $("exam").style.display = "flex";
 }
 const initData = tg?.initData || "";
-const examId = new URLSearchParams(location.search).get("exam");
+const params = new URLSearchParams(location.search);
+const examId = params.get("exam");
+const mode = params.get("mode") || "";   // mockdagi yazma: "1" / "2" - faqat shu qism, bo'sh - to'liq
 const userId = tg?.initDataUnsafe?.user?.id || "u";
-const DRAFT_KEY = `wdraft:${userId}:${examId}`;
+const DRAFT_KEY = `wdraft:${userId}:${examId}${mode ? ":" + mode : ""}`;
 
 let exam = null;          // /api/wexam javobi
 let texts = {};           // {email1: "...", ...}
@@ -383,7 +385,10 @@ async function load() {
   if (!examId) return fail("Mavzu tanlanmagan. Botga qaytib, mavzuni qayta tanlang.");
   show("loading");
   try {
-    exam = await api(`/api/wexam/${encodeURIComponent(examId)}${loadDraft() ? "?resume=1" : ""}`);
+    const qs = new URLSearchParams();
+    if (mode) qs.set("mode", mode);
+    if (loadDraft()) qs.set("resume", "1");
+    exam = await api(`/api/wexam/${encodeURIComponent(examId)}${qs.toString() ? "?" + qs : ""}`);
   } catch (e) {
     return fail(e.message, e.status === 403 || e.status === 404 ? null : load);
   }
@@ -598,6 +603,7 @@ async function submit(auto) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         exam_id: Number(exam.exam_id),
+        mode,
         texts,
         elapsed_sec: Math.round((Math.min(Date.now(), startedAt + limitMs()) - startedAt) / 1000),
       }),

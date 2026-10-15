@@ -113,8 +113,8 @@ class UserTouchMiddleware(BaseMiddleware):
 
 # Pastki menyu (reply-klaviatura) Telegram'da o'zi yangilanmaydi - faqat bot yangisini yuborganda.
 # Menyuga tugma qo'shilganda shu son oshiriladi: har bir foydalanuvchiga yangi menyu BIR MARTA yuboriladi.
-MENU_VERSION = 3
-MENU_NEWS = "🔄 Menyu yangilandi: «👤 Profil» — tarifingiz va topshirgan testlaringiz soni."
+MENU_VERSION = 4
+MENU_NEWS = "🔄 Menyu yangilandi: endi barcha testlar «📚 Mocklar» bo‘limida — har mockda Konuşma va Yazma, Full mock yoki alohida qismlar."
 
 
 class MenuRefreshMiddleware(BaseMiddleware):
