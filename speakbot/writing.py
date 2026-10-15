@@ -21,7 +21,7 @@ import re
 import db
 import grader
 import plans
-from access import get_plan, release_check, reserve
+from access import REDO_MSG, already_done, get_plan, release_check, reserve
 from parts import part_info
 
 log = logging.getLogger("writing")
@@ -356,6 +356,8 @@ async def grade_and_store(bot, user_id: int, user_name: str, exam: dict, texts: 
         prev = await db.find_recent_writing(user_id, exam["id"], joined)
         if prev and prev.get("result_json"):
             return json.loads(prev["result_json"]), False
+        if await already_done(user_id, exam, part):  # mockning har qismi bir marta ishlanadi
+            raise WritingDenied(REDO_MSG)
         # shu davrda ochilgan mock (yoki o'z testi) - limit qayta olinmaydi
         allowed, reason, reserved = await reserve(user_id, "writing", exam)
         if not allowed:

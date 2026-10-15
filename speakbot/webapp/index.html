@@ -600,7 +600,9 @@ async function finish() {
     const why = failed[0].reason?.message || "Javoblar yuborilmadi.";
     return fail(`${failed.length} ta javob yuborilmadi: ${why} Yozuvlaringiz saqlangan — «Qayta urinish»ni bosing.`, finish);
   }
-  $("loadingText").textContent = "Sun'iy intellekt baholamoqda… (10–20 soniya)";
+  $("loadingText").textContent = mockId
+    ? "Sun'iy intellekt 4 ta qismni baholamoqda… (1–2 daqiqa, sahifani yopmang)"
+    : "Sun'iy intellekt baholamoqda… (10–40 soniya)";
   try {
     const result = mockId
       ? await api("/api/mock_finish", {

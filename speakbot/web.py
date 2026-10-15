@@ -22,7 +22,7 @@ import html
 
 import plans
 import writing
-from access import check_access, get_plan, release_check, reserve
+from access import REDO_MSG, already_done, check_access, done_parts, get_plan, release_check, reserve
 import config
 from config import BOT_TOKEN, EXAM_LANGUAGE
 from languages import LANGUAGES
@@ -123,6 +123,8 @@ async def start_exam(request: web.Request):
     allowed, reason = await check_access(user["id"], "speaking", exam=exam)
     if not allowed:
         return _error(403, reason)
+    if await already_done(user["id"], exam):
+        return _error(403, REDO_MSG)
     # mini app qayta ochilsa (yoki «Qayta urinish») - yangi bo'sh urinish yaratilmaydi, oxirgisi davom etadi
     attempt_id = await db.reusable_attempt(user["id"], exam_id) or await db.create_attempt(user["id"], exam_id)
     info = part_info("speaking", exam.get("part"))
@@ -217,6 +219,8 @@ async def finish_exam(request: web.Request):
             return _error(400, "Ovozingiz eshitilmadi — mikrofon ishlamayotgan bo'lishi mumkin. Mikrofonni tekshirib, "
                                "imtihonni qaytadan boshlang. Bu urinish limitga kirmadi.")
         exam = await db.get_exam(attempt["exam_id"])
+        if await already_done(user["id"], exam):  # shu qism boshqa oynada allaqachon topshirilgan
+            return _error(403, REDO_MSG)
         # Imtihon davomida limit tugagan bo'lishi mumkin; shu davrda ochilgan mock qismi - limitsiz
         allowed, reason, held = await reserve(user["id"], "speaking", exam)
         if not allowed:
@@ -275,6 +279,9 @@ async def start_mock(request: web.Request):
     allowed, reason = await check_access(user["id"], "speaking", exam=parts[0])
     if not allowed:
         return _error(403, reason)
+    if (await done_parts(user["id"], mock["id"]))["speaking"]:
+        return _error(403, "Bu mockning Konuşma qismlaridan birini allaqachon ishlagansiz — Full mock yopiq. "
+                           "Qolgan qismlarni alohida ishlang yoki keyingi mockni tanlang 📚")
     items, attempts = [], []
     for ex in parts:
         attempt_id = await db.reusable_attempt(user["id"], ex["id"]) or await db.create_attempt(user["id"], ex["id"])
@@ -340,6 +347,9 @@ async def finish_mock(request: web.Request):
         if todo and not heard and not results:
             return _error(400, "Ovozingiz eshitilmadi — mikrofon ishlamayotgan bo'lishi mumkin. Mikrofonni tekshirib, "
                                "mockni qaytadan boshlang. Bu urinish limitga kirmadi.")
+        for _, exam, _ in todo:
+            if await already_done(user["id"], exam):
+                return _error(403, REDO_MSG)
         if todo:
             allowed, reason, held = await reserve(user["id"], "speaking", rows[0][1])
             if not allowed:
@@ -422,6 +432,8 @@ async def start_writing(request: web.Request):
     if not allowed:
         return _error(403, reason)
     part = writing_mode(exam, request.query.get("mode"))
+    if await already_done(user["id"], exam, part):
+        return _error(403, REDO_MSG)
     info = part_info("writing", part)
     return web.json_response(
         {

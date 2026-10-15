@@ -45,7 +45,7 @@ GRADER_PROVIDER = os.getenv("GRADER_PROVIDER", "groq").strip().lower()
 if GRADER_PROVIDER not in ("groq", "claude"):
     raise RuntimeError("GRADER_PROVIDER faqat 'groq' yoki 'claude' bo'lishi mumkin.")
 GRADER_MODEL = os.getenv("GRADER_MODEL", "openai/gpt-oss-120b")          # Groq modeli
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5")              # Claude modeli
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-5-5")              # Claude modeli
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
 if GRADER_PROVIDER == "claude" and not ANTHROPIC_API_KEY:
     raise RuntimeError("GRADER_PROVIDER=claude uchun ANTHROPIC_API_KEY kerak.")
@@ -53,6 +53,8 @@ if GRADER_PROVIDER == "claude" and not ANTHROPIC_API_KEY:
 # Nechta mustaqil "ekspert" baholaydi (rasmiy imtihonda - 2 ta, ballar o'rtachasi olinadi).
 # 2 qilinsa natija barqarorroq, lekin AI xarajati 2 baravar ko'payadi.
 RATERS = max(1, min(3, int(os.getenv("RATERS", "1"))))
+# Bir vaqtda nechta AI so'rovi (Groq bepul rejasi daqiqalik limiti uchun; pullik rejada oshirish mumkin)
+GRADER_CONCURRENCY = max(1, min(10, int(os.getenv("GRADER_CONCURRENCY", "2"))))
 
 # Groq Whisper - nutqni matnga aylantiradi.
 STT_MODEL = os.getenv("STT_MODEL", "whisper-large-v3-turbo")

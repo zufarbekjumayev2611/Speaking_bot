@@ -20,6 +20,7 @@ from config import (
     EXAM_LANGUAGE,
     GRADER_MODEL,
     GRADER_PROVIDER,
+    GRADER_CONCURRENCY,
     GROQ_API_KEY,
     RATERS,
     all_admin_ids,
@@ -59,9 +60,17 @@ def notes_for(kind: str) -> dict:
 
 
 class GraderError(RuntimeError):
-    def __init__(self, status: int, detail: str):
-        super().__init__(f"{GRADER_PROVIDER} {status}: {detail}")
+    def __init__(self, status: int, detail: str, retry_after: float | None = None, provider: str = GRADER_PROVIDER):
+        super().__init__(f"{provider} {status}: {detail}")
         self.status = status
+        self.retry_after = retry_after  # 429 da xizmat aytgan kutish vaqti (soniya)
+
+
+def _retry_after(resp) -> float | None:
+    try:
+        return float(resp.headers.get("retry-after", ""))
+    except ValueError:
+        return None
 
 
 # ---------------------------------------------------------------- promptlar
@@ -183,18 +192,25 @@ async def _ask_groq(system: str, user: str, json_mode: bool) -> str:
     ) as resp:
         body = await resp.json(content_type=None)
         if resp.status != 200:
-            raise GraderError(resp.status, str(body)[:500])
+            raise GraderError(resp.status, str(body)[:500], _retry_after(resp), "groq")
         return body["choices"][0]["message"]["content"] or ""
+
+
+# temperature faqat eski modellarda qabul qilinadi (Claude Haiku 5.5 va yangilarida standart bo'lmagan qiymat - 400)
+_SAMPLING_MODELS = ("claude-haiku-4-5", "claude-sonnet-4-5", "claude-sonnet-4-6", "claude-opus-4-5", "claude-opus-4-6")
 
 
 async def _ask_claude(system: str, user: str) -> str:
     payload = {
         "model": CLAUDE_MODEL,
-        "max_tokens": 3000,
-        "temperature": 0.2,
+        # Haiku 5.5 avval o'ylaydi (fikrlash tokenlari ham shu chegaraga kiradi) - javob kesilib qolmasin
+        "max_tokens": 16000,
         "system": system,
         "messages": [{"role": "user", "content": user}],
     }
+    if CLAUDE_MODEL.startswith(_SAMPLING_MODELS):
+        payload["temperature"] = 0.2
+        payload["max_tokens"] = 3000
     async with get_session().post(
         CLAUDE_URL,
         json=payload,
@@ -203,23 +219,65 @@ async def _ask_claude(system: str, user: str) -> str:
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
         },
-        timeout=aiohttp.ClientTimeout(total=90),
+        timeout=aiohttp.ClientTimeout(total=120),
     ) as resp:
         body = await resp.json(content_type=None)
         if resp.status != 200:
-            raise GraderError(resp.status, str(body)[:500])
+            raise GraderError(resp.status, str(body)[:500], _retry_after(resp), "claude")
+        if body.get("stop_reason") == "refusal":
+            raise GraderError(503, f"claude refusal: {body.get('stop_details')}")
+        # javobda fikrlash bloklari ham bo'ladi - faqat matn olinadi
         return "".join(b.get("text", "") for b in body.get("content", []) if b.get("type") == "text")
 
 
-async def _ask(system: str, user: str) -> str:
-    if GRADER_PROVIDER == "claude":
-        return await _ask_claude(system, user)
+async def _ask_groq_any(system: str, user: str) -> str:
     try:
         return await _ask_groq(system, user, json_mode=True)
     except GraderError as e:
         if e.status != 400:  # ba'zi modellar JSON rejimini qo'llamaydi
             raise
         return await _ask_groq(system, user, json_mode=False)
+
+
+# Bir vaqtda AI'ga ketadigan so'rovlar soni: Full mock 4 qismni, 2 ekspert - har birini 2 marta baholaydi.
+# Hammasi birdan yuborilsa, Groq bepul rejasining daqiqalik limiti (429 - «navbat band») darhol to'ladi.
+_slots = asyncio.Semaphore(GRADER_CONCURRENCY)
+BUSY = (429, 500, 502, 503, 529)  # vaqtinchalik: kutib qayta uriniladi
+RETRY_WAITS = (4, 10, 20)         # soniya; xizmat retry-after aytsa (60 s gacha) - o'shani kutamiz
+
+
+def _providers() -> list:
+    """Asosiy xizmat va (kaliti bo'lsa) zaxira: Groq band bo'lsa - Claude, Claude band bo'lsa - Groq."""
+    groq, claude = ("groq", _ask_groq_any), ("claude", _ask_claude)
+    if GRADER_PROVIDER == "claude":
+        return [claude] + ([groq] if GROQ_API_KEY else [])
+    return [groq] + ([claude] if ANTHROPIC_API_KEY else [])
+
+
+async def _ask(system: str, user: str) -> str:
+    """AI'dan javob: navbat bilan (_slots), band bo'lsa kutib qayta urinadi, oxirida zaxira xizmatga o'tadi."""
+    last = None
+    async with _slots:
+        for name, ask in _providers():
+            for i in range(len(RETRY_WAITS) + 1):
+                try:
+                    return await ask(system, user)
+                except GraderError as e:
+                    if e.status not in BUSY:
+                        raise
+                    last = e
+                    wait = e.retry_after if e.retry_after is not None else (RETRY_WAITS[i] if i < len(RETRY_WAITS) else 0)
+                    if i >= len(RETRY_WAITS) or wait > 60:  # kunlik limit tugagan - zaxira xizmatga
+                        break
+                    log.warning("%s band (%s) - %.0f s kutib qayta urinamiz", name, e.status, wait)
+                    await asyncio.sleep(wait)
+                except (asyncio.TimeoutError, aiohttp.ClientError) as e:
+                    last = GraderError(503, f"{type(e).__name__}", None, name)
+                    if i >= len(RETRY_WAITS):
+                        break
+                    await asyncio.sleep(RETRY_WAITS[i])
+            log.warning("%s hozir ishlamayapti - zaxira xizmat bor bo'lsa, unga o'tamiz", name)
+    raise last
 
 
 async def _grade_once(system: str, user: str, max_band: int, note_keys: list[str]) -> dict:

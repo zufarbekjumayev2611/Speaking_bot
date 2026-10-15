@@ -656,6 +656,20 @@ async def rename_mock(mock_id: int, title: str):
     await _execute("UPDATE mocks SET title = ? WHERE id = ?", (title, mock_id))
 
 
+async def mock_done_parts(telegram_id: int, mock_id: int) -> list[tuple[str, str]]:
+    """O'quvchi bu mockda yakunlagan qismlar: [(kind, part)]. Yazmada - ishlangan rejim (full / 1 / 2)."""
+    rows = await _fetchall(
+        """SELECT 'speaking' AS kind, e.part AS part FROM attempts a JOIN exams e ON e.id = a.exam_id
+           WHERE a.telegram_id = ? AND a.status = 'done' AND e.mock_id = ?
+           UNION
+           SELECT 'writing', COALESCE(json_extract(w.result_json, '$.part'), e.part)
+           FROM writing_submissions w JOIN exams e ON e.id = w.exam_id
+           WHERE w.telegram_id = ? AND w.status = 'done' AND e.mock_id = ?""",
+        (telegram_id, mock_id, telegram_id, mock_id),
+    )
+    return [(r["kind"], r["part"]) for r in rows]
+
+
 async def mocks_done(telegram_id: int) -> set[int]:
     """O'quvchi kamida bir qismini ishlagan mocklar (ro'yxatda ✅ belgisi uchun)."""
     rows = await _fetchall(

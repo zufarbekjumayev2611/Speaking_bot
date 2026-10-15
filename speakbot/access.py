@@ -156,3 +156,38 @@ async def usage_block(user_id: int) -> str:
     elif info["next_reset"]:
         lines.append(f"🔄 Yangi 30 kunlik davr: {_local_date(info['next_reset'])}")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------- mockni qayta ishlab bo'lmaydi
+
+REDO_MSG = "Bu qismni allaqachon ishlagansiz — mockni qayta ishlab bo'lmaydi. Keyingi mockni tanlang 📚"
+
+
+async def done_parts(user_id: int, mock_id: int | None) -> dict[str, set[str]]:
+    """Mockdagi yopilgan (ishlangan) qismlar: {"speaking": {"1.1", ..., "full"?}, "writing": {"1", "2", "full"?}}.
+    Har qism bir marta ishlanadi; biror qismi ishlangan bo'lsa, o'sha bo'limning Full mock'i yopiladi.
+    Adminlar uchun hech narsa yopilmaydi."""
+    out: dict[str, set[str]] = {"speaking": set(), "writing": set()}
+    if not mock_id or is_admin(user_id):
+        return out
+    for kind, part in await db.mock_done_parts(user_id, mock_id):
+        if kind == "writing":
+            out["writing"] |= {"1", "2"} if part == "full" else {part}
+        else:
+            out["speaking"].add(part)
+    for kind in out:
+        if out[kind]:
+            out[kind].add("full")
+    return out
+
+
+async def already_done(user_id: int, exam: dict | None, part: str | None = None) -> bool:
+    """Shu qism (yazmada - rejim: full / 1 / 2) avval ishlanganmi. part berilmasa - testning o'z qismi."""
+    if not exam or not exam.get("mock_id"):
+        return False
+    kind = exam.get("kind") or "speaking"
+    part = part or exam.get("part")
+    done = (await done_parts(user_id, exam["mock_id"]))[kind]
+    if kind == "writing" and part == "full":
+        return bool(done)
+    return part in done
