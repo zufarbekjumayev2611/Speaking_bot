@@ -135,12 +135,20 @@ async def premium_info(message: Message, state: FSMContext):
         "1 ta. Shu davrda uning Full mock'i, alohida qismlari va qayta ishlash <b>bepul</b>. "
         "<i>2 ekspert</i> — ishingizni ikki mustaqil AI ekspert baholaydi, ball aniqroq.",
         "",
+        f"📅 <b>Muddat:</b> pullik tarif to'lov qilingan kundan boshlab <b>{plans.PERIOD_DAYS} kun</b> amal qiladi — "
+        "limit shu 30 kun uchun beriladi. Keyingi oy yana to'lov qilsangiz, yangi 30 kun va yangi limit boshlanadi. "
+        "Bepul tarif limiti esa har oyning 1-sanasida yangilanadi.",
+        "",
         f"📌 Sizning tarifingiz: <b>{e(plans.name(plan))}</b>" + (f" — {_local(prem['until'])} gacha" if prem else ""),
         await usage_block(uid),
         "",
         f"💳 <b>Obuna bo'lish:</b> {e(await db.get_setting(INFO_KEY, DEFAULT_INFO))}",
+        "",
+        f"👤 <b>Admin: {e(config.ADMIN_CONTACT)}</b> — to'lov va obuna uchun shu yerga yozing 👇",
     ]
-    await message.answer("\n".join(lines), parse_mode="HTML")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+        text=f"✍️ Adminga yozish ({config.ADMIN_CONTACT})", url=f"https://t.me/{config.ADMIN_CONTACT.lstrip('@')}")]])
+    await message.answer("\n".join(lines), parse_mode="HTML", reply_markup=kb)
 
 
 # ======================================================================

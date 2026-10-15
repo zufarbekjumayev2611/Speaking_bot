@@ -89,7 +89,8 @@ async def check_access(user_id: int, kind: str, _extra: int = 0, exam: dict | No
         when = f"Yangi 30 kunlik davr {_local_date(u['next_reset'])} da boshlanadi."
     else:
         when = f"Obunangiz {_local_date(u['until'])} gacha."
-    upsell = " Ko'proq kerak bo'lsa — «🚀 Tarifni yaxshilash»." if u["plan"] != "vip" else ""
+    upsell = (f" Ko'proq kerak bo'lsa — «🚀 Tarifni yaxshilash» yoki admin: {config.ADMIN_CONTACT}."
+              if u["plan"] != "vip" else "")
     return False, f"{label} limiti tugadi ({used}/{u['limit']} mock). {when}{upsell}"
 
 
@@ -151,7 +152,7 @@ async def usage_block(user_id: int) -> str:
         lim = "∞" if info["limit"] is None else str(info["limit"])
         lines.append(f"{icon} {plans.KIND_LABEL[kind]}  {plans.bar(info['used'], info['limit'])}  <b>{info['used']}/{lim}</b> mock")
     if info["plan"] == "free":
-        lines.append("🔄 Limit har oyning 1-sanasida yangilanadi")
+        lines.append("🔄 Bepul limit har oyning 1-sanasida yangilanadi")
     elif info["next_reset"]:
         lines.append(f"🔄 Yangi 30 kunlik davr: {_local_date(info['next_reset'])}")
     return "\n".join(lines)

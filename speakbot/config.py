@@ -80,6 +80,8 @@ PORT = int(os.getenv("PORT", "8080"))
 # Sherik / tashqi tizim uchun foydalanuvchilar ro'yxati: GET /api/users, sarlavha
 # «Authorization: Bearer <USERS_API_KEY>». Kalit qo'yilmasa (yoki 16 belgidan qisqa bo'lsa) endpoint o'chiq.
 USERS_API_KEY = os.getenv("USERS_API_KEY", "").strip()
+# To'lov / obuna uchun admin (tarif sahifasida va limit tugaganda ko'rsatiladi)
+ADMIN_CONTACT = "@" + (os.getenv("ADMIN_CONTACT", "muhammad_hocam").strip().lstrip("@") or "muhammad_hocam")
 if len(USERS_API_KEY) < 16:
     USERS_API_KEY = ""
 
