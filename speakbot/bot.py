@@ -50,8 +50,7 @@ router.message.filter(F.chat.type == "private")
 SPEAKING_NAME = LANG["speaking_name"]   # turkcha: "Konuşma"
 WRITING_NAME = LANG["writing_name"]     # turkcha: "Yazma"
 
-BTN_MOCKS = "📚 Mocklar"
-# eski klaviaturadagi «Konuşma» / «Yazma» tugmalari ham mocklar ro'yxatini ochadi
+BTN_MOCKS = "📚 Mocklar"  # eski klaviatura (endi pastki menyuda Konuşma va Yazma alohida)
 BTN_SPEAKING = f"🎙 {SPEAKING_NAME}"
 BTN_WRITING = f"✍️ {WRITING_NAME}"
 BTN_ADMIN = "⚙️ Admin panel"
@@ -108,7 +107,7 @@ def _part_from_key(key: str) -> str | None:
 
 
 def main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
-    rows = [[KeyboardButton(text=BTN_MOCKS)]]
+    rows = [[KeyboardButton(text=BTN_SPEAKING), KeyboardButton(text=BTN_WRITING)]]
     if config.SHOW_MY_RESULTS:
         rows += [[KeyboardButton(text=BTN_PROFILE), KeyboardButton(text=BTN_RESULTS)], [KeyboardButton(text=BTN_PREMIUM)]]
     else:
@@ -132,12 +131,12 @@ async def cmd_start(message: Message, state: FSMContext):
         f"Men — {LANG['name_uz']} bo'yicha <b>multilevel imtihon murabbiyingiz</b>. Javoblaringizni sun'iy intellekt "
         "Bilimni baholash agentligining <b>rasmiy mezonlari</b> bo'yicha baholaydi.\n"
         "━━━━━━━━━━━━━━━━\n"
-        "📚 <b>Mocklar</b> — to'liq imtihon variantlari: har birida 🎙 "
-        f"<b>{SPEAKING_NAME}</b> (Part 1.1 → 3) va ✍️ <b>{WRITING_NAME}</b> (1 va 2-qism)\n"
+        f"🎙 <b>{SPEAKING_NAME}</b> — Part 1.1 → 1.2 → 2 → 3, real imtihondagidek\n"
+        f"✍️ <b>{WRITING_NAME}</b> — 1-qism (2 xat) va 2-qism (blog), taymer bilan\n"
         "🔥 <b>Full mock</b> — hammasi ketma-ket, yoki istalgan qismni alohida ishlang\n"
         "🏅 <b>Natija</b> — ball, daraja (A2–C1) va 10 tagacha xato tahlili\n"
         "━━━━━━━━━━━━━━━━\n"
-        f"Boshlash uchun pastdagi «{BTN_MOCKS}» tugmasini bosing 👇{admin}",
+        f"Boshlash uchun pastdan «{BTN_SPEAKING}» yoki «{BTN_WRITING}» ni tanlang 👇{admin}",
         parse_mode="HTML",
         reply_markup=main_keyboard(message.from_user.id),
     )
@@ -168,7 +167,7 @@ async def _my_results_view(user_id: int, page: int):
     has_next = len(rows) > MY_PER_PAGE
     rows = rows[:MY_PER_PAGE]
     if not rows and page == 0:
-        return ("📊 <b>Natijalarim</b>\n\nHali natijangiz yo'q. «📚 Mocklar» bo'limidan mock ishlang — natija shu "
+        return ("📊 <b>Natijalarim</b>\n\nHali natijangiz yo'q. «🎙 Konuşma» yoki «✍️ Yazma» bo'limidan mock ishlang — natija shu "
                 "yerda saqlanadi."), None
     counts = await db.my_result_counts(user_id)
     lines = ["📊 <b>Natijalarim</b>",
@@ -333,20 +332,35 @@ def _mock_badges(m: dict) -> str:
     return ("🎙" if m["speaking"] else "") + ("✍️" if m["writing"] else "")
 
 
-async def _mocks_view(user_id: int, page: int = 0):
-    """📚 Mocklar: 10 tadan sahifa (yuzlab mock bo'lsa ham ekran yengil), ✅ - o'quvchi ishlaganlari."""
-    mocks = await _mock_catalog()
+_KIND_KEY = {"speaking": "s", "writing": "w"}
+_KEY_KIND = {v: k for k, v in _KIND_KEY.items()}
+
+
+async def _mocks_view(user_id: int, page: int = 0, kind: str | None = None):
+    """Mocklar ro'yxati: 10 tadan sahifa (yuzlab mock bo'lsa ham ekran yengil), ✅ - o'quvchi ishlaganlari.
+    kind (speaking / writing) - pastki menyudagi «Konuşma» / «Yazma»: faqat shu bo'limi bor mocklar,
+    mock bosilganda to'g'ridan-to'g'ri o'sha bo'lim ochiladi."""
+    mocks = [m for m in await _mock_catalog() if not kind or m[kind]]
     pages = max(1, -(-len(mocks) // MOCK_PAGE))
     page = min(max(page, 0), pages - 1)
     chunk = mocks[page * MOCK_PAGE:(page + 1) * MOCK_PAGE]
-    done = await db.mocks_done(user_id) if chunk else set()
-    lines = [
-        "📚 <b>Mocklar</b>",
-        "━━━━━━━━━━━━━━━━",
-        f"Har bir mock — haqiqiy imtihon: 🎙 <b>{SPEAKING_NAME}</b> (Part 1.1 → 1.2 → 2 → 3) va "
-        f"✍️ <b>{WRITING_NAME}</b> (1 va 2-qism).",
-        "🔥 <b>Full mock</b> — hammasi ketma-ket; vaqtingiz kam bo'lsa — istalgan qismni alohida ishlang.",
-    ]
+    done = await db.mocks_done(user_id, kind) if chunk else set()
+    if kind == "speaking":
+        lines = [f"🎙 <b>{SPEAKING_NAME}</b>", "━━━━━━━━━━━━━━━━",
+                 "Har bir mock — Part 1.1 → 1.2 → 2 → 3, xuddi imtihondagidek.",
+                 "🔥 <b>Full mock</b> — hammasi ketma-ket; vaqtingiz kam bo'lsa — istalgan qismni alohida ishlang."]
+    elif kind == "writing":
+        lines = [f"✍️ <b>{WRITING_NAME}</b>", "━━━━━━━━━━━━━━━━",
+                 "Har bir mock — 1-qism (2 ta xat) va 2-qism (blog / maqola), 60 daqiqa.",
+                 "🔥 <b>Full mock</b> — ikkalasi birga; yoki istalgan qismni alohida yozing."]
+    else:
+        lines = [
+            "📚 <b>Mocklar</b>",
+            "━━━━━━━━━━━━━━━━",
+            f"Har bir mock — haqiqiy imtihon: 🎙 <b>{SPEAKING_NAME}</b> (Part 1.1 → 1.2 → 2 → 3) va "
+            f"✍️ <b>{WRITING_NAME}</b> (1 va 2-qism).",
+            "🔥 <b>Full mock</b> — hammasi ketma-ket; vaqtingiz kam bo'lsa — istalgan qismni alohida ishlang.",
+        ]
     if config.PREMIUM_ENABLED and not is_admin(user_id):
         lines.append(f"\n💼 {await usage_text(user_id)}\n<i>Mockni ochsangiz, limitdan 1 ta olinadi. Har bir qism "
                      "<b>bir marta</b> ishlanadi — ishlangan mockni qayta ishlab bo'lmaydi.</i>")
@@ -355,20 +369,23 @@ async def _mocks_view(user_id: int, page: int = 0):
         return "\n".join(lines), None
     lines.append(f"\n📋 Jami <b>{len(mocks)}</b> ta mock. ✅ — siz ishlaganlar. Tanlang 👇")
     B = InlineKeyboardButton
-    buttons = [B(text=f"{'✅ ' if m['id'] in done else ''}{m['title']} {_mock_badges(m)}"[:40],
-                 callback_data=f"mko:{m['id']}") for m in chunk]
+    open_cb = {"speaking": "mks", "writing": "mkw"}.get(kind, "mko")
+    badges = (lambda m: "") if kind else (lambda m: " " + _mock_badges(m))
+    buttons = [B(text=f"{'✅ ' if m['id'] in done else ''}{m['title']}{badges(m)}"[:40],
+                 callback_data=f"{open_cb}:{m['id']}") for m in chunk]
     rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+    suffix = f":{_KIND_KEY[kind]}" if kind else ""
     if pages > 1:
-        nav = [B(text="◀️", callback_data=f"mk:{page - 1}")] if page > 0 else []
-        nav.append(B(text=f"{page + 1} / {pages}", callback_data=f"mk:{page}"))
+        nav = [B(text="◀️", callback_data=f"mk:{page - 1}{suffix}")] if page > 0 else []
+        nav.append(B(text=f"{page + 1} / {pages}", callback_data=f"mk:{page}{suffix}"))
         if page < pages - 1:
-            nav.append(B(text="▶️", callback_data=f"mk:{page + 1}"))
+            nav.append(B(text="▶️", callback_data=f"mk:{page + 1}{suffix}"))
         rows.append(nav)
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def _show_mocks(target: Message, user_id: int, page: int = 0, edit: bool = False):
-    text, kb = await _mocks_view(user_id, page)
+async def _show_mocks(target: Message, user_id: int, page: int = 0, edit: bool = False, kind: str | None = None):
+    text, kb = await _mocks_view(user_id, page, kind)
     if edit:
         try:
             return await target.edit_text(text, parse_mode="HTML", reply_markup=kb)
@@ -377,7 +394,21 @@ async def _show_mocks(target: Message, user_id: int, page: int = 0, edit: bool =
     await target.answer(text, parse_mode="HTML", reply_markup=kb)
 
 
-@router.message(F.text.in_({BTN_MOCKS, BTN_SPEAKING, BTN_WRITING} | OLD_SPEAKING_BUTTONS | OLD_WRITING_BUTTONS))
+@router.message(F.text.in_({BTN_SPEAKING} | OLD_SPEAKING_BUTTONS))
+@router.message(Command("konusma", "speaking"))
+async def speaking_menu(message: Message, state: FSMContext):
+    await state.clear()
+    await _show_mocks(message, message.from_user.id, kind="speaking")
+
+
+@router.message(F.text.in_({BTN_WRITING} | OLD_WRITING_BUTTONS))
+@router.message(Command("yazma", "writing"))
+async def writing_menu(message: Message, state: FSMContext):
+    await state.clear()
+    await _show_mocks(message, message.from_user.id, kind="writing")
+
+
+@router.message(F.text == BTN_MOCKS)
 @router.message(Command("mock", "mocklar"))
 async def mocks_menu(message: Message, state: FSMContext):
     await state.clear()
@@ -394,7 +425,10 @@ async def mocks_page(callback: CallbackQuery, state: FSMContext):
     await state.clear()  # chatda yozilayotgan yazma bekor bo'ladi - keyingi xabar insho deb olinmasin
     bits = callback.data.split(":")
     page = int(bits[1]) if bits[0] == "mk" and bits[1].lstrip("-").isdigit() else 0
-    await _show_mocks(callback.message, callback.from_user.id, page, edit=True)
+    kind = _KEY_KIND.get(bits[2]) if bits[0] == "mk" and len(bits) > 2 else None
+    if callback.data in ("sp_menu", "wr_menu") or bits[0] in ("sp", "spp", "wr", "wrp"):
+        kind = "speaking" if bits[0].startswith("sp") else "writing"
+    await _show_mocks(callback.message, callback.from_user.id, page, edit=True, kind=kind)
     await callback.answer()
 
 
@@ -461,7 +495,7 @@ async def mock_speaking(callback: CallbackQuery, state: FSMContext):
     if done:
         lines.append("\n✅ — ishlangan qismlar. Har qism <b>bir marta</b> ishlanadi; Full mock faqat hech bir qismi "
                      "ishlanmagan mockda bo'ladi.")
-    rows.append([InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"mko:{m['id']}")])
+    rows.append([InlineKeyboardButton(text=f"⬅️ {SPEAKING_NAME} mocklari", callback_data="mk:0:s")])
     lines.append("\n🎧 Tinch joyda bo'ling va mikrofonga ruxsat bering.")
     await callback.message.edit_text("\n".join(lines), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
     await callback.answer()
@@ -504,7 +538,7 @@ async def mock_writing(callback: CallbackQuery, state: FSMContext):
         info = part_info("writing", m["writing"]["part"])
         lines.append(f"<b>{e(info['name'])}</b>")
         rows = [[wbtn("✍️ Boshlash", "")]] if not done else []
-    rows.append([B(text="⬅️ Orqaga", callback_data=f"mko:{m['id']}")])
+    rows.append([B(text=f"⬅️ {WRITING_NAME} mocklari", callback_data="mk:0:w")])
     await callback.message.edit_text("\n".join(lines), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
     await callback.answer()
 
@@ -520,7 +554,7 @@ async def mock_part_done(callback: CallbackQuery):
 async def writing_cancel(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.answer("Bekor qilindi")
-    await _show_mocks(callback.message, callback.from_user.id)
+    await _show_mocks(callback.message, callback.from_user.id, kind="writing")
 
 
 def _wmode(exam: dict, mode: str | None) -> str | None:
@@ -574,7 +608,7 @@ async def writing_topic(callback: CallbackQuery, state: FSMContext):
                                    f"&t={int(time.time())}"),
         )],
         [InlineKeyboardButton(text="💬 Chatda yozish", callback_data=f"wchat:{exam['id']}:{mode}")],
-        [InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"mkw:{exam['mock_id']}" if exam.get("mock_id") else "mk:0")],
+        [InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"mkw:{exam['mock_id']}" if exam.get("mock_id") else "mk:0:w")],
     ])
     if row["photo_file_id"]:
         await callback.message.answer_photo(row["photo_file_id"])
