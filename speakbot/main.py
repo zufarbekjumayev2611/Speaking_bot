@@ -101,7 +101,10 @@ async def main():
     app = create_app(bot)
     hook = None
     if BOT_MODE == "webhook":
-        hook = SimpleRequestHandler(dispatcher=dp, bot=bot, secret_token=ops.WEBHOOK_SECRET)
+        # handle_in_background: Telegram'ga darhol «qabul qildim» deb javob beriladi, xabar fonda ishlanadi.
+        # Aks holda (aiogram'da standart - False) Telegram har xabar to'liq ishlanishini kutadi va sekin javob
+        # (baza, AI) bo'lsa navbatdagi xabarlar ushlanib qoladi - bot «qotadi».
+        hook = SimpleRequestHandler(dispatcher=dp, bot=bot, secret_token=ops.WEBHOOK_SECRET, handle_in_background=True)
         hook.register(app, path=ops.WEBHOOK_PATH)
     runner = web.AppRunner(app)
     await runner.setup()

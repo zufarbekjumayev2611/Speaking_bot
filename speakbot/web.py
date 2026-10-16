@@ -112,14 +112,13 @@ def _photo_url(q: dict) -> str | None:
 async def start_exam(request: web.Request):
     user = _user_or_401(request)
     exam_id = int(request.match_info["exam_id"])
-    exam = await db.get_exam(exam_id)
+    exam, questions, _ = await asyncio.gather(  # parallel - mini app tezroq ochilsin
+        db.get_exam(exam_id), db.get_questions(exam_id), db.save_user(user["id"], _full_name(user), user.get("username")))
     if not db.exam_open_for(exam, user["id"]) or (exam.get("kind") or "speaking") != "speaking":
         return _error(404, "Bu imtihon hozir yopiq.")
-    questions = await db.get_questions(exam_id)
     if not questions:
         return _error(404, "Bu imtihonda hali savol yo'q.")
 
-    await db.save_user(user["id"], _full_name(user), user.get("username"))
     allowed, reason = await check_access(user["id"], "speaking", exam=exam)
     if not allowed:
         return _error(403, reason)
@@ -400,14 +399,13 @@ async def _writing_exam(exam_id: int, user_id: int, resume: bool = False,
                         mode: str | None = None) -> tuple[dict | None, dict | None, dict]:
     """(mavzu, topshiriq qatori, maydonlar) - mavzu ochiq va topshirig'i to'liq bo'lsagina.
     resume=True: o'quvchi saqlangan qoralamasini davom ettiryapti - mavzu yopilgan bo'lsa ham ochiladi."""
-    exam = await db.get_exam(exam_id)
+    exam, row = await asyncio.gather(db.get_exam(exam_id), db.get_writing_task(exam_id))  # parallel
     if not exam or exam.get("kind") != "writing":
         return None, None, {}
     if exam.get("owner_id") is not None and exam["owner_id"] != user_id:
         return None, None, {}  # boshqa o'quvchining shaxsiy testi
     if not resume and not db.exam_open_for(exam, user_id):
         return None, None, {}
-    row = await db.get_writing_task(exam_id)
     part = writing_mode(exam, mode)
     values = writing.task_values(exam.get("part"), row)
     if not row or writing.missing_fields(part, values):
@@ -571,11 +569,7 @@ async def boss_data(request: web.Request):
         u = await db.get_user(uid) or {}
         bosses.append({"id": uid, "name": u.get("full_name"), "username": u.get("username"), "boss": True,
                        "perms": ["Hamma bo'limlar"]})
-    team = bosses + [{"id": a["telegram_id"], "name": a.get("full_name"), "username": a.get("username"), "boss": False,
-                      "added_at": _iso_or_none(a.get("added_at")),
-                      "perms": [label for key, (label, _) in roles.SECTIONS.items()
-                                if key in (roles.decode(a.get("perms")) or set(roles.SECTIONS))]}
-                     for a in admins if a["telegram_id"] not in config.ADMIN_IDS]
+    team = bosses + await _team_admins(admins)
     payments = await db.list_payments(60)
     body = {
         "me": me.get("first_name"),
@@ -585,7 +579,7 @@ async def boss_data(request: web.Request):
             "active_week": st["active_week"], "checks_today": st["today"], "checks_week": st["week"],
             "checks_month": st["month"], "speaking_total": st["speaking"], "writing_total": st["writing"],
             "subscribers": st["premium"], "by_plan": {p: st[p] for p in plans.PAID},
-            "mocks": await db.count_mocks(), "pending_payments": await db.count_pending_payments(),
+            "mocks": st["mocks"], "pending_payments": await db.count_pending_payments(),
         },
         "revenue": {
             "total": m["total"], "exact": m["exact_sum"], "approx": m["approx_sum"], "count": len(m["rows"]),
@@ -608,6 +602,7 @@ async def boss_data(request: web.Request):
         "activity": [{"day": r["d"], "speaking": r["speaking"], "writing": r["writing"]}
                      for r in await db.daily_activity(14)],
         "team": team,
+        "sections": [{"key": k, "label": label} for k, (label, _) in roles.SECTIONS.items()],
         "plans": [{"plan": p, "name": plans.PLANS[p]["name"], "icon": plans.PLANS[p]["icon"],
                    "price": plans.price_for(p), "speaking": plans.limit_for(p, "speaking"),
                    "writing": plans.limit_for(p, "writing"), "raters": plans.raters_for(p)} for p in plans.PLANS],
@@ -615,6 +610,69 @@ async def boss_data(request: web.Request):
         "card": db.setting("card_number") or os.getenv("CARD_NUMBER", ""),
     }
     return web.json_response(body, headers={"Cache-Control": "no-store"}, dumps=lambda o: json.dumps(o, ensure_ascii=False))
+
+
+async def _team_admins(admins=None) -> list[dict]:
+    import roles
+    admins = admins if admins is not None else await db.list_admins()
+    act = await db.admin_activity(30)
+    out = []
+    for a in admins:
+        if a["telegram_id"] in config.ADMIN_IDS:
+            continue
+        keys = roles.decode(a.get("perms"))
+        keys = set(roles.SECTIONS) if keys is None else keys
+        out.append({"id": a["telegram_id"], "name": a.get("full_name"), "username": a.get("username"), "boss": False,
+                    "added_at": _iso_or_none(a.get("added_at")), "keys": [k for k in roles.SECTIONS if k in keys],
+                    "perms": [label for k, (label, _) in roles.SECTIONS.items() if k in keys],
+                    "grants": (act.get(a["telegram_id"]) or {}).get("grants", 0),
+                    "checks": (act.get(a["telegram_id"]) or {}).get("checks", 0)})
+    return out
+
+
+async def boss_admin(request: web.Request):
+    """Boss saytidan adminlarni boshqarish: {action: add | remove | perms, id | query, keys: [...]}."""
+    import roles
+    me = _boss_or_403(request)
+    try:
+        body = await request.json()
+        action = str(body.get("action") or "")
+    except (ValueError, AttributeError):
+        return _error(400, "So'rov noto'g'ri.")
+    bot: Bot = request.app["bot"]
+    if action == "add":
+        found = await db.find_user(str(body.get("query") or "")[:64])
+        if not found or not found.get("known"):
+            return _error(404, "Foydalanuvchi topilmadi. U avval botga /start yuborgan bo'lishi kerak "
+                               "(ID yoki @username yozing).")
+        uid = found["telegram_id"]
+        if config.is_admin(uid):
+            return _error(409, "Bu odam allaqachon admin.")
+        await db.add_admin(uid, me["id"])
+        try:
+            await bot.send_message(uid, "👮 Siz admin etib tayinlandingiz. Menyuni yangilash uchun /start yuboring.")
+        except Exception:
+            pass
+    else:
+        try:
+            uid = int(body.get("id"))
+        except (TypeError, ValueError):
+            return _error(400, "Admin tanlanmagan.")
+        if config.is_owner(uid) or uid not in config.EXTRA_ADMIN_IDS:
+            return _error(404, "Admin topilmadi (bossni bu yerdan o'zgartirib bo'lmaydi).")
+        if action == "remove":
+            await db.remove_admin(uid)
+            try:
+                await bot.send_message(uid, "Siz endi admin emassiz.")
+            except Exception:
+                pass
+        elif action == "perms":
+            keys = {k for k in (body.get("keys") or []) if k in roles.SECTIONS}
+            await db.set_admin_perms(uid, None if keys == set(roles.SECTIONS) else roles.encode(keys))
+        else:
+            return _error(400, "Noma'lum amal.")
+    return web.json_response({"ok": True, "team": await _team_admins()},
+                             dumps=lambda o: json.dumps(o, ensure_ascii=False))
 
 
 async def boss_users(request: web.Request):
@@ -645,6 +703,7 @@ def create_app(bot: Bot) -> web.Application:
     app.router.add_get("/boss", _page("boss.html"))
     app.router.add_get("/api/boss/data", boss_data)
     app.router.add_get("/api/boss/users", boss_users)
+    app.router.add_post("/api/boss/admin", boss_admin)
     app.router.add_get("/health", lambda r: web.Response(text="ok"))
     app.router.add_get("/api/users", api_users)
     app.router.add_get(r"/api/exam/{exam_id:\d+}", start_exam)

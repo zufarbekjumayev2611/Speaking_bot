@@ -53,6 +53,11 @@ Kalitni almashtirish uchun Render'da `USERS_API_KEY` ni o'zgartirib, qayta deplo
 
 ## 👑 Boss va adminlar
 
+- **/boss** (yoki Admin panel → «👑 Boss paneli») — hamma narsa bir joyda: bugungi holat, kutilayotgan cheklar,
+  30 kunlik tushum, o'quvchilar, jamoa va barcha bo'limlar (Mocklar, Foydalanuvchilar, Premium, Natijalar, Xabar,
+  Statistika, Adminlarni boshqarish, Tariflar/narx/karta, Tizim holati, Boss sayti). Adminlarni Boss saytidan ham
+  qo'shish, bo'limlarini yoqish/yopish va olib tashlash mumkin.
+
 - **🖥 Boss sayti** (`/boss`) — Admin panel yoki Boss paneldagi tugma Telegram ichida to'liq ekranli sahifani ochadi:
   tushum (7 / 30 / 90 kun / 1 yil), kim qaysi tarifni sotib oldi va kim tasdiqladi, to'lov cheklari, o'quvchilar
   (qidiruv, tarif bo'yicha), kunlik tekshiruvlar, jamoa va huquqlar, tariflar. Faqat `ADMIN_IDS` dagi bosslar kiradi
@@ -114,3 +119,12 @@ beriladi va o'quvchiga xabar boradi («❌ Rad etish» ham bor). Karta raqami: B
 - 👥 Foydalanuvchilar: ro'yxat/qidiruv, karta (tarif, oylik tekshiruvlar, oxirgi natijalar, premium tarixi), premium berish/bekor qilish, 🚫 bloklash.
 - 📣 Xabar yuborish: hammaga yoki tarif bo'yicha (ko'rinish + tasdiqlash, fon rejimida yuboriladi).
 - 📊 Natijalar (sahifalab), 📈 Statistika (faollik, tariflar, tekshiruvlar), 👮 Adminlar (`ADMIN_IDS` — asosiy adminlar, o'chirib bo'lmaydi), ⚙️ Sozlamalar (limitlar, to'lov matni).
+
+
+## Tezlik
+
+Turso'ga har so'rov tarmoq orqali (~0.1–0.3 s). Shuning uchun: o'quvchining tarifi va yakunlangan ishlari xotirada
+keshlanadi (yangi ish tugaganda / obuna berilganda yangilanadi), mustaqil so'rovlar parallel yuboriladi, FSM holati
+xotirada turadi, webhook xabarlari fonda ishlanadi (`handle_in_background`). Ko'p tugmalar bazaga umuman bormaydi.
+Eng katta tezlik uchun Turso bazasi va Render servisi **bir xil mintaqada** bo'lsin (Boss → 🩺 Tizim holati →
+«Baza javob tezligi»: 100 ms dan past bo'lishi yaxshi).

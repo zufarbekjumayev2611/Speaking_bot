@@ -17,7 +17,7 @@ SECTIONS: dict[str, tuple[str, tuple[str, ...]]] = {
         "wtask:", "wtf:", "wph:", "wphx:", "wprev:",
     )),
     "users": ("👥 Foydalanuvchilar", ("adm_users:", "usr:", "usr_bl:", "usr_search")),
-    "premium": ("💎 Premium", ("adm_prem", "pg_start", "pgp:", "pgd:", "pgu:", "pr_start", "prv:", "usr_rv:", "pay_ok:", "pay_no:")),
+    "premium": ("💎 Premium", ("adm_prem", "pg_start", "pgp:", "pgd:", "pgu:", "pr_start", "prv:", "usr_rv:", "pay_ok:", "pay_no:", "pchk:")),
     "results": ("📊 Natijalar", ("results:", "rpdf:")),
     "broadcast": ("📣 Xabar yuborish", ("adm_bc", "bc_")),
     "stats": ("📈 Statistika", ("adm_stats",)),

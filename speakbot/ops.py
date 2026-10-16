@@ -166,12 +166,29 @@ class UserTouchMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         user = data.get("event_from_user")
         if user and not user.is_bot and time.time() - self._seen.get(user.id, 0) > TOUCH_EVERY:
-            try:
-                await db.save_user(user.id, user.full_name, user.username)
-                self._seen[user.id] = time.time()
-            except Exception:
-                log.exception("Foydalanuvchini saqlab bo'lmadi (%s)", user.id)
+            self._seen[user.id] = time.time()
+            # fonda: javob bazaga yozilishini kutmaydi (har yangi foydalanuvchida ~0.2 s tejaladi)
+            _saving[user.id] = asyncio.create_task(self._save(user))
         return await handler(event, data)
+
+    async def _save(self, user):
+        try:
+            await db.save_user(user.id, user.full_name, user.username)
+        except Exception:
+            self._seen.pop(user.id, None)  # keyingi xabarda qayta urinadi
+            log.exception("Foydalanuvchini saqlab bo'lmadi (%s)", user.id)
+        finally:
+            _saving.pop(user.id, None)
+
+
+_saving: dict[int, asyncio.Task] = {}  # hali bazaga yozilayotgan foydalanuvchilar
+
+
+async def user_saved(user_id: int):
+    """Foydalanuvchi qatori bazaga yozilib bo'lishini kutish (uni o'zgartiradigan amaldan oldin)."""
+    task = _saving.get(user_id)
+    if task:
+        await asyncio.shield(task)
 
 
 # Pastki menyu (reply-klaviatura) Telegram'da o'zi yangilanmaydi - faqat bot yangisini yuborganda.
@@ -193,6 +210,7 @@ class MenuRefreshMiddleware(BaseMiddleware):
                 if not (event.text or "").startswith("/start"):  # /start yangi menyuni o'zi yuboradi
                     from bot import main_keyboard
                     await event.answer(MENU_NEWS, reply_markup=main_keyboard(user.id))
+                await user_saved(user.id)  # yangi foydalanuvchi qatori yozilib bo'lsin - aks holda UPDATE hech narsa qilmaydi
                 await db.set_menu_version(user.id, MENU_VERSION)
             self._fresh.add(user.id)
         except Exception:
@@ -239,7 +257,7 @@ async def status(message: Message):
     if not is_admin(message.from_user.id):
         return
     st = await db.get_stats()
-    mocks = await db.count_mocks()
+    mocks = st["mocks"]
     await message.answer(
         await human_status(message.bot, technical=True)
         + f"\n\n👥 O'quvchilar: <b>{st['users']}</b> (bugun +{st['new_today']}) • 📚 Mocklar: <b>{mocks}</b>\n"
