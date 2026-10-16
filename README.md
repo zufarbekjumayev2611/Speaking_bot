@@ -53,6 +53,13 @@ Kalitni almashtirish uchun Render'da `USERS_API_KEY` ni o'zgartirib, qayta deplo
 
 ## 👑 Boss va adminlar
 
+- **🖥 Boss sayti** (`/boss`) — Admin panel yoki Boss paneldagi tugma Telegram ichida to'liq ekranli sahifani ochadi:
+  tushum (7 / 30 / 90 kun / 1 yil), kim qaysi tarifni sotib oldi va kim tasdiqladi, to'lov cheklari, o'quvchilar
+  (qidiruv, tarif bo'yicha), kunlik tekshiruvlar, jamoa va huquqlar, tariflar. Faqat `ADMIN_IDS` dagi bosslar kiradi
+  (Telegram imzosi tekshiriladi); sayt faqat ko'rsatadi, o'zgartirishlar botda.
+- **Admin bilan bog'lanish:** o'quvchi «👤 Profil» ostidagi tugma, `/yordam` yoki tarif sahifasi orqali adminga yozadi.
+  Username'ni Boss → ⚙️ Tariflar va narxlar → «👤 Admin username» dan o'zgartiradi.
+
 - **Boss** — Render'dagi `ADMIN_IDS`: hamma huquq + «👑 Boss paneli» (30 kunlik tushum va kim nechta obuna bergani,
   adminlar va ularning huquqlari, tarif/narx sozlamalari, tizim holati).
 - **Admin** — botda qo'shilganlar. Boss har bir admin uchun bo'limlarni yoqadi/yopadi: Testlar, Foydalanuvchilar,

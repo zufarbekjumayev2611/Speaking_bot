@@ -6,6 +6,7 @@ yo'q bo'lsa - Render'dagi CARD_NUMBER."""
 import html
 import logging
 import os
+import re
 
 from aiogram import F, Router
 from aiogram.filters import Command
@@ -36,6 +37,10 @@ class CardEdit(StatesGroup):
     text = State()
 
 
+class ContactEdit(StatesGroup):
+    text = State()
+
+
 def e(value) -> str:
     return html.escape(str(value or ""), quote=False)
 
@@ -50,15 +55,14 @@ def card_block() -> str:
     if card:
         where = f"💳 <b>To'lov uchun karta:</b>\n<code>{e(card)}</code>\nTarif narxini shu kartaga o'tkazing."
     else:
-        where = f"💳 <b>To'lov:</b> karta raqamini admindan so'rang — {e(config.ADMIN_CONTACT)}."
+        where = f"💳 <b>To'lov:</b> karta raqamini admindan so'rang — {e(db.admin_contact())}."
     return (f"{where}\n\nTo'lagach, pastdagi <b>«✅ To'lovni tasdiqlash»</b> tugmasini bosing va chek rasmini "
             "yuboring — admin tasdiqlashi bilan obuna avtomatik yoqiladi.")
 
 
 def pay_buttons() -> list[list[InlineKeyboardButton]]:
     return [[InlineKeyboardButton(text="✅ To'lovni tasdiqlash (chek yuborish)", callback_data="pay")],
-            [InlineKeyboardButton(text=f"✍️ Adminga yozish ({config.ADMIN_CONTACT})",
-                                  url=f"https://t.me/{config.ADMIN_CONTACT.lstrip('@')}")]]
+            [InlineKeyboardButton(text=f"✍️ Adminga yozish ({db.admin_contact()})", url=db.admin_link())]]
 
 
 def _plan_line(plan: str) -> str:
@@ -149,7 +153,7 @@ async def pay_receipt(message: Message, state: FSMContext):
     await message.answer(
         f"✅ Chekingiz qabul qilindi (#{pid}) va adminlarga yuborildi.\n"
         "Tekshirilgach obuna <b>avtomatik</b> yoqiladi va sizga xabar keladi. Savol bo'lsa: "
-        f"{e(config.ADMIN_CONTACT)}", parse_mode="HTML")
+        f"{e(db.admin_contact())}", parse_mode="HTML")
 
 
 @router.message(PayCheck.photo, ~F.text.startswith("/"))
@@ -231,7 +235,7 @@ async def pay_reject(callback: CallbackQuery):
         await callback.bot.send_message(
             pay["telegram_id"],
             f"❌ To'lov cheki #{pid} tasdiqlanmadi. Pul tushmagan yoki chek noto'g'ri bo'lishi mumkin.\n"
-            f"Savol bo'lsa, adminga yozing: {e(config.ADMIN_CONTACT)}", parse_mode="HTML")
+            f"Savol bo'lsa, adminga yozing: {e(db.admin_contact())}", parse_mode="HTML")
     except Exception:
         pass
     await _close_card(callback, f"❌ <b>Rad etildi</b> — {e(callback.from_user.full_name)}")
@@ -254,7 +258,7 @@ async def card_edit(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(CardEdit.text)
+@router.message(CardEdit.text, ~F.text.startswith("/"))  # /cancel - bot.py dagi umumiy bekor qilishga o'tadi
 async def card_save(message: Message, state: FSMContext):
     if not config.is_owner(message.from_user.id):
         return await state.clear()
@@ -266,4 +270,39 @@ async def card_save(message: Message, state: FSMContext):
     from premium import _settings_view
     view, kb = await _settings_view()
     await message.answer("✅ Saqlandi.")
+    await message.answer(view, parse_mode="HTML", reply_markup=kb)
+
+
+# ---------------------------------------------------------------- Boss: o'quvchilar yozadigan admin
+
+@router.callback_query(F.data == "ac_edit")
+async def contact_edit(callback: CallbackQuery, state: FSMContext):
+    if not config.is_owner(callback.from_user.id):
+        return await callback.answer()
+    await state.clear()
+    await state.set_state(ContactEdit.text)
+    await callback.message.answer(
+        f"👤 <b>Admin bilan bog'lanish</b> — o'quvchi «Profil» va «Tarifni yaxshilash» bo'limlarida shu adminga "
+        f"yozadi.\n\nHozir: <b>{e(db.admin_contact())}</b>\n\nYangi username'ni yozing (masalan <code>@ali_admin</code>). "
+        "Render'dagi standartga qaytarish uchun «-». Bekor qilish: /cancel", parse_mode="HTML")
+    await callback.answer()
+
+
+@router.message(ContactEdit.text, ~F.text.startswith("/"))
+async def contact_save(message: Message, state: FSMContext):
+    if not config.is_owner(message.from_user.id):
+        return await state.clear()
+    raw = (message.text or "").strip()
+    for prefix in ("https://t.me/", "http://t.me/", "t.me/"):
+        if raw.lower().startswith(prefix):
+            raw = raw[len(prefix):]
+    raw = raw.strip().lstrip("@").strip("/")
+    if raw != "-" and not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{3,31}", raw or ""):
+        return await message.answer("Telegram username'ni yozing, masalan @ali_admin (5–32 belgi: harf, raqam, _). "
+                                    "Bekor qilish: /cancel")
+    await db.set_setting("admin_contact", "" if raw == "-" else raw)
+    await state.clear()
+    from premium import _settings_view
+    view, kb = await _settings_view()
+    await message.answer(f"✅ Saqlandi: o'quvchilar endi {e(db.admin_contact())} ga yozadi.")
     await message.answer(view, parse_mode="HTML", reply_markup=kb)

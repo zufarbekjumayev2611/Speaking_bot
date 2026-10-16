@@ -84,6 +84,69 @@ def instance_line() -> str:
     return "\n".join(lines + warnings())
 
 
+def _ago(seconds: int) -> str:
+    d, h, m = seconds // 86400, seconds % 86400 // 3600, seconds % 3600 // 60
+    return (f"{d} kun " if d else "") + (f"{h} soat " if h or d else "") + f"{m} daqiqa"
+
+
+async def _people(ids) -> str:
+    out = []
+    for uid in ids:
+        u = await db.get_user(uid) or {}
+        name = html.escape(u.get("full_name") or f"ID {uid}", quote=False)
+        out.append(f"{name} (@{html.escape(u['username'], quote=False)})" if u.get("username") else name)
+    return ", ".join(out) or "—"
+
+
+async def human_status(bot=None, technical: bool = False) -> str:
+    """Tizim holati - oddiy tilda: ishlayaptimi, tezligi, qaysi server / baza / AI, kimlar boshqaradi."""
+    ping_ms = await db.ping() * 1000
+    speed = "yaxshi" if ping_ms < 400 else ("o'rtacha" if ping_ms < 1200 else "sekin ⚠️")
+    up = int(time.time() - STARTED)
+    lines = ["🩺 <b>Tizim holati</b>", "━━━━━━━━━━━━━━━━",
+             f"✅ Bot ishlayapti — {_ago(up)}dan beri (oxirgi ishga tushish / deploydan)",
+             f"⚡ Baza javob tezligi: <b>{ping_ms:.0f} ms</b> — {speed}"]
+    if config.BOT_MODE == "webhook" and bot is not None:
+        try:
+            info = await bot.get_webhook_info()
+            queue = info.pending_update_count
+            lines.append(f"📨 Javob kutayotgan xabarlar (webhook): <b>{queue}</b>" + (" — hammasi o'z vaqtida" if queue < 5 else " ⚠️"))
+            if info.url != WEBHOOK_URL:
+                lines.append("⚠️ Telegram xabarlarni boshqa manzilga yuboryapti — boshqa joyda eski bot ishlayapti")
+            elif info.last_error_message and info.last_error_date and time.time() - info.last_error_date.timestamp() < 600:
+                lines.append(f"⚠️ Oxirgi xato: {html.escape(info.last_error_message)}")
+        except Exception:
+            pass
+    elif config.BOT_MODE != "webhook":
+        lines.append(f"📨 Xabarlarni olish usuli: {_mode_text()}")
+    on_render = bool(os.getenv("RENDER"))
+    server = f"Render — «{html.escape(SERVICE)}»" if on_render else f"lokal kompyuter ({html.escape(SERVICE)})"
+    if config.TURSO_URL:
+        base = "Turso (bulutda) — ma'lumotlar deploy va qayta ishga tushishda <b>saqlanadi</b>"
+    else:
+        base = "SQLite fayl — " + ("⚠️ Render'da diskda bo'lmasa, deployda o'chadi" if on_render else "lokal")
+    groq, claude = bool(config.GROQ_API_KEY), bool(config.ANTHROPIC_API_KEY)
+    if config.GRADER_PROVIDER == "claude":
+        ai = f"Claude ({html.escape(config.CLAUDE_MODEL)})" + (" • zaxira: Groq" if groq else "")
+    else:
+        ai = f"Groq ({html.escape(config.GRADER_MODEL)})" + (
+            f" • zaxira: Claude ({html.escape(config.CLAUDE_MODEL)})" if claude else " • zaxira: yo'q")
+    admins = await db.list_admins()
+    lines += ["━━━━━━━━━━━━━━━━",
+              f"🖥 Server: {server} • versiya <code>{VERSION}</code>",
+              f"🗄 Baza: {base}",
+              f"🤖 AI baholash: {ai}",
+              "🎤 Ovozni matnga o'girish: Groq Whisper",
+              f"⏱ Bir vaqtda AI so'rovlari: {config.GRADER_CONCURRENCY}",
+              f"👑 Bosslar: {await _people(config.ADMIN_IDS)}",
+              f"👮 Adminlar: <b>{len(admins)}</b> ta"]
+    problems = warnings()
+    lines += ["━━━━━━━━━━━━━━━━"] + (problems or ["👍 Muammo topilmadi — hammasi joyida."])
+    if technical:
+        lines.append(f"\n<i>Texnik: nusxa <code>{html.escape(INSTANCE)}</code> • mini app <code>{WEBAPP_URL}</code></i>")
+    return "\n".join(lines)
+
+
 async def _notify_admins(bot, text: str):
     for admin_id in all_admin_ids():
         try:
@@ -175,33 +238,13 @@ fallback.message.filter(F.chat.type == "private")
 async def status(message: Message):
     if not is_admin(message.from_user.id):
         return
-    users = (await db._fetchone("SELECT COUNT(*) AS c FROM users"))["c"]
-    exams = await db._fetchall(
-        "SELECT COALESCE(kind, 'speaking') AS kind, SUM(is_active) AS open, COUNT(*) AS total FROM exams WHERE owner_id IS NULL GROUP BY 1"
-    )
-    by_kind = {r["kind"]: r for r in exams}
-    sp, wr = by_kind.get("speaking", {}), by_kind.get("writing", {})
-    up = int(time.time() - STARTED)
-    speed = f"Baza javobi: <b>{await db.ping() * 1000:.0f} ms</b>"
-    if config.BOT_MODE == "webhook":
-        try:
-            info = await message.bot.get_webhook_info()
-            speed += f" • navbatda: {info.pending_update_count} xabar"
-            if info.url != WEBHOOK_URL:
-                speed += "\n⚠️ Webhook boshqa manzilga o'rnatilgan — boshqa joyda eski bot ishlayapti"
-            elif info.last_error_message and info.last_error_date and time.time() - info.last_error_date.timestamp() < 600:
-                speed += f"\n⚠️ Oxirgi xato: {html.escape(info.last_error_message)}"
-        except Exception:
-            pass
+    st = await db.get_stats()
+    mocks = await db.count_mocks()
     await message.answer(
-        "🩺 <b>Holat</b>\n"
-        f"{instance_line()}\n"
-        f"{speed}\n"
-        f"Ishlayapti: {up // 3600} soat {up % 3600 // 60} daqiqa\n\n"
-        f"👥 Foydalanuvchilar: <b>{users}</b>\n"
-        f"🎙 Konuşma testlari: <b>{sp.get('open') or 0}</b> ochiq / {sp.get('total') or 0}\n"
-        f"✍️ Yazma mavzulari: <b>{wr.get('open') or 0}</b> ochiq / {wr.get('total') or 0}\n\n"
-        "<i>/status ni bir necha marta yuboring: «Server» har safar bir xil bo'lishi kerak. Har xil bo'lsa — "
+        await human_status(message.bot, technical=True)
+        + f"\n\n👥 O'quvchilar: <b>{st['users']}</b> (bugun +{st['new_today']}) • 📚 Mocklar: <b>{mocks}</b>\n"
+        f"🎯 Bugungi tekshiruvlar: <b>{st['today']}</b>\n\n"
+        "<i>/status ni bir necha marta yuboring: «nusxa» har safar bir xil bo'lishi kerak. Har xil bo'lsa — "
         "bot ikki joyda ishga tushirilgan, bittasini to'xtating.</i>",
         parse_mode="HTML",
     )

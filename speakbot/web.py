@@ -540,11 +540,111 @@ async def api_users(request: web.Request):
                              dumps=lambda o: json.dumps(o, ensure_ascii=False))
 
 
+# ---------- 👑 Boss sayti (faqat ADMIN_IDS dagi bosslar) ----------
+# Telegram ichida to'liq ekranda ochiladi; foydalanuvchi Telegram imzosi (initData) bilan tekshiriladi -
+# adminlar va o'quvchilar kira olmaydi. Sayt faqat ko'rsatadi; o'zgartirishlar botdagi Boss panelida.
+
+def _boss_or_403(request: web.Request) -> dict:
+    user = _user_or_401(request)
+    if not config.is_owner(user["id"]):
+        raise web.HTTPForbidden(text=json.dumps({"error": "Bu sahifa faqat Boss uchun."}), content_type="application/json")
+    return user
+
+
+def _iso_or_none(stamp: str | None) -> str | None:
+    return stamp.replace(" ", "T") + "Z" if stamp else None
+
+
+async def boss_data(request: web.Request):
+    import boss  # aylana importdan qochish: boss.py aiogram routerini yuklaydi
+    import roles
+    me = _boss_or_403(request)
+    try:
+        days = min(max(int(request.query.get("days", 30)), 1), 3650)
+    except ValueError:
+        days = 30
+    m = await boss._money(days)
+    st = await db.get_stats()
+    admins = await db.list_admins()
+    bosses = []
+    for uid in config.ADMIN_IDS:
+        u = await db.get_user(uid) or {}
+        bosses.append({"id": uid, "name": u.get("full_name"), "username": u.get("username"), "boss": True,
+                       "perms": ["Hamma bo'limlar"]})
+    team = bosses + [{"id": a["telegram_id"], "name": a.get("full_name"), "username": a.get("username"), "boss": False,
+                      "added_at": _iso_or_none(a.get("added_at")),
+                      "perms": [label for key, (label, _) in roles.SECTIONS.items()
+                                if key in (roles.decode(a.get("perms")) or set(roles.SECTIONS))]}
+                     for a in admins if a["telegram_id"] not in config.ADMIN_IDS]
+    payments = await db.list_payments(60)
+    body = {
+        "me": me.get("first_name"),
+        "days": days,
+        "summary": {
+            "users": st["users"], "new_today": st["new_today"], "new_week": st["new_week"], "blocked": st["blocked"],
+            "active_week": st["active_week"], "checks_today": st["today"], "checks_week": st["week"],
+            "checks_month": st["month"], "speaking_total": st["speaking"], "writing_total": st["writing"],
+            "subscribers": st["premium"], "by_plan": {p: st[p] for p in plans.PAID},
+            "mocks": await db.count_mocks(), "pending_payments": await db.count_pending_payments(),
+        },
+        "revenue": {
+            "total": m["total"], "exact": m["exact_sum"], "approx": m["approx_sum"], "count": len(m["rows"]),
+            "by_plan": [{"plan": p, "name": plans.PLANS[p]["name"], "icon": plans.PLANS[p]["icon"],
+                         "count": m["by_plan"].get(p, [0, 0])[0], "sum": m["by_plan"].get(p, [0, 0])[1]}
+                        for p in plans.PAID],
+        },
+        "purchases": [{
+            "date": _iso_or_none(r["created_at"]), "until": _iso_or_none(r.get("until")),
+            "buyer_id": r.get("telegram_id"), "buyer": r.get("buyer_name"), "buyer_username": r.get("buyer_username"),
+            "plan": r.get("plan") or "pro", "days": r.get("days"), "sum": r["sum"], "exact": r["sure"],
+            "admin": r.get("admin_name"), "admin_username": r.get("admin_username"), "admin_id": r.get("granted_by"),
+        } for r in m["rows"][:500]],
+        "payments": [{
+            "id": p["id"], "date": _iso_or_none(p["created_at"]), "decided_at": _iso_or_none(p.get("decided_at")),
+            "user_id": p["telegram_id"], "name": p.get("full_name"), "username": p.get("username"),
+            "plan": p.get("plan"), "decided_plan": p.get("decided_plan"), "status": p["status"],
+            "admin": p.get("admin_name"), "admin_username": p.get("admin_username"),
+        } for p in payments],
+        "activity": [{"day": r["d"], "speaking": r["speaking"], "writing": r["writing"]}
+                     for r in await db.daily_activity(14)],
+        "team": team,
+        "plans": [{"plan": p, "name": plans.PLANS[p]["name"], "icon": plans.PLANS[p]["icon"],
+                   "price": plans.price_for(p), "speaking": plans.limit_for(p, "speaking"),
+                   "writing": plans.limit_for(p, "writing"), "raters": plans.raters_for(p)} for p in plans.PLANS],
+        "contact": db.admin_contact(),
+        "card": db.setting("card_number") or os.getenv("CARD_NUMBER", ""),
+    }
+    return web.json_response(body, headers={"Cache-Control": "no-store"}, dumps=lambda o: json.dumps(o, ensure_ascii=False))
+
+
+async def boss_users(request: web.Request):
+    _boss_or_403(request)
+    q = request.query
+    plan = q.get("plan") or None
+    if plan and plan not in _API_PLANS:
+        plan = None
+    try:
+        offset = max(int(q.get("offset", 0)), 0)
+    except ValueError:
+        offset = 0
+    rows = await db.users_for_api(plan, None, 30, offset, (q.get("q") or "")[:60])
+    users = [{
+        "id": r["telegram_id"], "name": r["full_name"], "username": r["username"], "joined": _iso_or_none(r["joined_at"]),
+        "plan": r["plan"], "until": _iso_or_none(r["plan_until"]), "speaking": r["speaking_count"],
+        "writing": r["writing_count"], "last": _iso_or_none(r["last_activity"]), "blocked": bool(r["blocked"]),
+    } for r in rows]
+    return web.json_response({"total": rows[0]["total"] if rows else 0, "offset": offset, "users": users},
+                             headers={"Cache-Control": "no-store"}, dumps=lambda o: json.dumps(o, ensure_ascii=False))
+
+
 def create_app(bot: Bot) -> web.Application:
     app = web.Application(client_max_size=MAX_AUDIO_BYTES + 1024 * 1024)
     app["bot"] = bot
     app.router.add_get("/", _page("index.html"))
     app.router.add_get("/writing", _page("writing.html"))
+    app.router.add_get("/boss", _page("boss.html"))
+    app.router.add_get("/api/boss/data", boss_data)
+    app.router.add_get("/api/boss/users", boss_users)
     app.router.add_get("/health", lambda r: web.Response(text="ok"))
     app.router.add_get("/api/users", api_users)
     app.router.add_get(r"/api/exam/{exam_id:\d+}", start_exam)

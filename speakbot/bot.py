@@ -255,13 +255,27 @@ async def _profile_text(user) -> str:
               f"{KIND_ICON['writing']} <b>{counts.get('writing', 0)}</b>"]
     if not is_admin(uid) and config.PREMIUM_ENABLED:
         lines.append(f"\n🚀 Ko'proq mashq uchun: «{BTN_PREMIUM}»")
+    lines.append("💬 Savol yoki muammo bo'lsa — pastdagi tugma orqali adminga yozing.")
     return "\n".join(lines)
+
+
+def contact_kb() -> InlineKeyboardMarkup:
+    """«Admin bilan bog'lanish» - Profil ostida (menyuni egallamaydi, lekin kerak bo'lganda topiladi)."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=f"💬 Admin bilan bog'lanish ({db.admin_contact()})", url=db.admin_link())]])
 
 
 @router.message(F.text == BTN_PROFILE)
 @router.message(Command("profil", "profile"))
 async def profile(message: Message):
-    await message.answer(await _profile_text(message.from_user), parse_mode="HTML")
+    await message.answer(await _profile_text(message.from_user), parse_mode="HTML", reply_markup=contact_kb())
+
+
+@router.message(Command("yordam", "help", "aloqa"))
+async def help_contact(message: Message):
+    await message.answer(
+        f"💬 <b>Admin bilan bog'lanish</b>\n\nTo'lov, obuna yoki bot ishlashi bo'yicha savollar bo'lsa, adminga yozing: "
+        f"<b>{e(db.admin_contact())}</b>", parse_mode="HTML", reply_markup=contact_kb())
 
 
 @router.message(Command("status"))
@@ -1080,6 +1094,8 @@ async def _admin_panel_view(user_id: int):
     rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
     if boss:
         rows.append([B(text="👑 Boss paneli", callback_data="boss")])
+        if WEBAPP_URL.startswith("https://"):
+            rows.append([B(text="🖥 Boss sayti (to'liq ekran)", web_app=WebAppInfo(url=f"{WEBAPP_URL}/boss?t={int(time.time())}"))])
     if not rows:
         text += "\n\n🔒 Sizga hali birorta bo'lim ochilmagan. Boss'dan ruxsat so'rang."
     return text, InlineKeyboardMarkup(inline_keyboard=rows)

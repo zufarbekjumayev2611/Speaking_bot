@@ -149,7 +149,7 @@ async def premium_info(message: Message, state: FSMContext):
     info = await db.get_setting(INFO_KEY, DEFAULT_INFO)
     if info and info != DEFAULT_INFO:  # admin yozgan qo'shimcha to'lov ma'lumoti
         lines += ["", f"ℹ️ {e(info)}"]
-    lines += ["", f"👤 <b>Admin: {e(config.ADMIN_CONTACT)}</b> — savollar bo'lsa shu yerga yozing."]
+    lines += ["", f"👤 <b>Admin: {e(db.admin_contact())}</b> — savollar bo'lsa shu yerga yozing."]
     kb = InlineKeyboardMarkup(inline_keyboard=payments.pay_buttons())
     await message.answer("\n".join(lines), parse_mode="HTML", reply_markup=kb)
 
@@ -462,12 +462,14 @@ async def _settings_view():
         + "\n".join(f"• {_limit_line(p)}" for p in plans.PLANS)
         + "\n\nO'zgartirish uchun tarifni tanlang (Konuşma limiti, Yazma limiti, narx)."
         + f"\n\n💳 <b>Karta raqami</b>: <code>{e(payments.card_text() or 'kiritilmagan')}</code>"
+        + f"\n👤 <b>O'quvchilar yozadigan admin</b>: {e(db.admin_contact())}"
         + f"\n<b>Qo'shimcha to'lov matni</b> (ixtiyoriy):\n<i>{e(info)}</i>"
     )
     kb = _kb([
         [_btn(f"✏️ {plans.name(p)}", f"lim:{p}") for p in list(plans.PLANS)[:2]],
         [_btn(f"✏️ {plans.name(p)}", f"lim:{p}") for p in list(plans.PLANS)[2:]],
-        [_btn("💳 Karta raqami", "card_edit"), _btn("📝 Qo'shimcha matn", "pi_edit")],
+        [_btn("💳 Karta raqami", "card_edit"), _btn("👤 Admin username", "ac_edit")],
+        [_btn("📝 Qo'shimcha to'lov matni", "pi_edit")],
         [_btn("⬅️ Boss paneli", "boss")],
     ])
     return text, kb

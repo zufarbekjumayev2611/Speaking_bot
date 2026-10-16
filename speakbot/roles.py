@@ -22,7 +22,7 @@ SECTIONS: dict[str, tuple[str, tuple[str, ...]]] = {
     "broadcast": ("📣 Xabar yuborish", ("adm_bc", "bc_")),
     "stats": ("📈 Statistika", ("adm_stats",)),
 }
-BOSS_ONLY = ("boss", "adm_admins", "ad_add", "adr:", "adrd:", "adm_settings", "lim:", "pi_edit", "prm:", "card_edit")
+BOSS_ONLY = ("boss", "adm_admins", "ad_add", "adr:", "adrd:", "adm_settings", "lim:", "pi_edit", "prm:", "card_edit", "ac_edit")
 
 
 def perms_of(user_id: int) -> set[str]:
