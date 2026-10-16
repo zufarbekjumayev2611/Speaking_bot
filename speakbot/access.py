@@ -89,7 +89,7 @@ async def check_access(user_id: int, kind: str, _extra: int = 0, exam: dict | No
         when = f"Yangi 30 kunlik davr {_local_date(u['next_reset'])} da boshlanadi."
     else:
         when = f"Obunangiz {_local_date(u['until'])} gacha."
-    upsell = (f" Ko'proq kerak bo'lsa — «🚀 Tarifni yaxshilash» yoki admin: {config.ADMIN_CONTACT}."
+    upsell = (f" Ko'proq kerak bo'lsa — «🚀 Tarifni yaxshilash» yoki admin: {db.admin_contact()}."
               if u["plan"] != "vip" else "")
     return False, f"{label} limiti tugadi ({used}/{u['limit']} mock). {when}{upsell}"
 

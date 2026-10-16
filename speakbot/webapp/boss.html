@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Boss paneli</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  /* Boss paneli: Iznik ko'ki va firuza - mini app bilan bir oila; jadval o'rniga kartochkalar (telefon) */
+  :root {
+    --bg: #f3f5f9; --surface: #ffffff; --surface2: #eef2f8; --text: #172131; --hint: #687588;
+    --line: #dfe5ee; --cobalt: #1e4fa3; --turq: #12917f; --clay: #c2413a; --amber: #b7791f;
+    --std: #3b6fd8; --pro: #7c4dcc; --vip: #c58a12;
+    --safe-t: env(safe-area-inset-top, 0px); --safe-b: env(safe-area-inset-bottom, 0px);
+    color-scheme: light;
+  }
+  :root[data-theme="dark"] {
+    --bg: #10151d; --surface: #18202b; --surface2: #202a37; --text: #e7ecf3; --hint: #96a2b3;
+    --line: #2b3646; --cobalt: #6f9cf2; --turq: #3cc4ae; --clay: #ef7a72; --amber: #e2a74a;
+    --std: #7fa3f0; --pro: #b08ef0; --vip: #e6b64c; color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body { font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: calc(12px + var(--safe-t)) max(16px, env(safe-area-inset-right, 0px)) calc(28px + var(--safe-b)) max(16px, env(safe-area-inset-left, 0px)); }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 6px 0 14px; }
+  h1 { font-size: 22px; margin: 0; letter-spacing: -.01em; }
+  .sub { color: var(--hint); font-size: 13.5px; margin-top: 2px; }
+  select, input { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+  input { width: 100%; }
+  .tabs { position: sticky; top: var(--safe-t); z-index: 5; display: flex; gap: 6px; overflow-x: auto; padding: 8px 0; background: var(--bg); scrollbar-width: none; }
+  .tabs button { flex: none; font: inherit; font-size: 14px; font-weight: 600; border: 1px solid var(--line); background: var(--surface); color: var(--text); padding: 8px 14px; border-radius: 999px; cursor: pointer; }
+  .tabs button[aria-selected="true"] { background: var(--cobalt); border-color: var(--cobalt); color: #fff; }
+  .tabs button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--turq); outline-offset: 2px; }
+  .badge { display: inline-block; min-width: 18px; padding: 0 6px; margin-left: 4px; border-radius: 999px; background: var(--clay); color: #fff; font-size: 12px; }
+  section { display: grid; gap: 14px; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .kpi { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; min-width: 0; }
+  .kpi .l { color: var(--hint); font-size: 12.5px; text-transform: uppercase; letter-spacing: .05em; }
+  .kpi .v { font-size: 24px; font-weight: 750; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .kpi .n { color: var(--hint); font-size: 13px; }
+  .kpi.money .v { color: var(--turq); }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px; min-width: 0; }
+  .card h2 { font-size: 16px; margin: 0 0 10px; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+  .bar { display: grid; grid-template-columns: 110px 1fr auto; gap: 10px; align-items: center; margin: 8px 0; font-size: 14px; }
+  .track { height: 10px; background: var(--surface2); border-radius: 999px; overflow: hidden; }
+  .fill { height: 100%; border-radius: 999px; }
+  .num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .muted { color: var(--hint); font-size: 13px; }
+  .list { display: grid; gap: 8px; }
+  .row { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 11px 13px; display: grid; gap: 4px; min-width: 0; }
+  .row .top { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  .row .who { font-weight: 650; overflow-wrap: anywhere; }
+  .row .meta { color: var(--hint); font-size: 13px; display: flex; flex-wrap: wrap; gap: 4px 12px; }
+  .pill { display: inline-block; font-size: 12px; font-weight: 650; padding: 2px 9px; border-radius: 999px; background: var(--surface2); color: var(--text); white-space: nowrap; }
+  .p-standard { background: color-mix(in srgb, var(--std) 18%, transparent); color: var(--std); }
+  .p-pro { background: color-mix(in srgb, var(--pro) 18%, transparent); color: var(--pro); }
+  .p-vip { background: color-mix(in srgb, var(--vip) 20%, transparent); color: var(--vip); }
+  .s-pending { background: color-mix(in srgb, var(--amber) 20%, transparent); color: var(--amber); }
+  .s-approved { background: color-mix(in srgb, var(--turq) 18%, transparent); color: var(--turq); }
+  .s-rejected { background: color-mix(in srgb, var(--clay) 18%, transparent); color: var(--clay); }
+  .sum { font-weight: 750; font-variant-numeric: tabular-nums; }
+  .approx { color: var(--amber); }
+  .chart { width: 100%; height: 170px; display: block; }
+  .legend { display: flex; gap: 14px; font-size: 13px; color: var(--hint); margin-top: 6px; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  .filters { display: flex; gap: 8px; flex-wrap: wrap; }
+  .filters > * { flex: 1 1 160px; }
+  .more { font: inherit; font-weight: 650; border: 1px solid var(--line); background: var(--surface); color: var(--cobalt); border-radius: 12px; padding: 10px; cursor: pointer; }
+  .state { text-align: center; color: var(--hint); padding: 40px 10px; }
+  .note { font-size: 13px; color: var(--hint); border-left: 3px solid var(--line); padding-left: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  td, th { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--line); }
+  th { color: var(--hint); font-weight: 600; font-size: 12.5px; }
+  .scroll { overflow-x: auto; }
+  [hidden] { display: none !important; }
+  @media (prefers-reduced-motion: no-preference) { .fill { transition: width .5s ease; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>👑 Boss paneli</h1>
+      <div class="sub" id="sub">Yuklanmoqda…</div>
+    </div>
+    <label class="muted">Davr:
+      <select id="days" aria-label="Hisobot davri">
+        <option value="7">7 kun</option>
+        <option value="30" selected>30 kun</option>
+        <option value="90">90 kun</option>
+        <option value="365">1 yil</option>
+      </select>
+    </label>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="home" aria-selected="true">Umumiy</button>
+    <button role="tab" data-tab="sales">Sotuvlar</button>
+    <button role="tab" data-tab="checks">Cheklar <span class="badge" id="pendingBadge" hidden></span></button>
+    <button role="tab" data-tab="users">O'quvchilar</button>
+    <button role="tab" data-tab="team">Jamoa va sozlamalar</button>
+  </nav>
+
+  <div class="state" id="state">Ma'lumotlar yuklanmoqda…</div>
+
+  <section id="tab-home" hidden>
+    <div class="kpis" id="kpis"></div>
+    <div class="grid2">
+      <div class="card"><h2>Tariflar bo'yicha tushum</h2><div id="planBars"></div><p class="muted" id="revNote"></p></div>
+      <div class="card"><h2>Hozir faol obunachilar</h2><div id="subBars"></div></div>
+    </div>
+    <div class="card">
+      <h2>Kunlik tekshiruvlar — oxirgi 14 kun</h2>
+      <svg class="chart" id="chart" role="img" aria-label="Kunlik tekshiruvlar grafigi"></svg>
+      <div class="legend"><span><i class="dot" style="background:var(--cobalt)"></i>Konuşma</span><span><i class="dot" style="background:var(--turq)"></i>Yazma</span></div>
+    </div>
+  </section>
+
+  <section id="tab-sales" hidden>
+    <div class="filters">
+      <input id="salesQ" type="search" placeholder="O'quvchi yoki admin ismi…" aria-label="Sotuvlarni qidirish">
+      <select id="salesPlan" aria-label="Tarif"><option value="">Hamma tariflar</option><option value="standard">⭐ Standard</option><option value="pro">💎 Pro</option><option value="vip">👑 VIP</option></select>
+    </div>
+    <p class="muted" id="salesSum"></p>
+    <div class="list" id="sales"></div>
+    <p class="note">≈ — to'lov summasi yozilmagan (obuna qo'lda berilgan): tarif narxi × muddat bo'yicha hisoblangan. Chek orqali tasdiqlangan obunalarda summa aniq.</p>
+  </section>
+
+  <section id="tab-checks" hidden>
+    <div class="filters">
+      <select id="chkStatus" aria-label="Holat"><option value="">Hamma cheklar</option><option value="pending">⏳ Kutilmoqda</option><option value="approved">✅ Tasdiqlangan</option><option value="rejected">❌ Rad etilgan</option></select>
+    </div>
+    <div class="list" id="checks"></div>
+    <p class="note">Chekni tasdiqlash yoki rad etish — botda, chek rasmi ostidagi tugmalar bilan.</p>
+  </section>
+
+  <section id="tab-users" hidden>
+    <div class="filters">
+      <input id="userQ" type="search" placeholder="Ism, @username yoki ID…" aria-label="O'quvchini qidirish">
+      <select id="userPlan" aria-label="Tarif"><option value="">Hamma tariflar</option><option value="free">🆓 Bepul</option><option value="standard">⭐ Standard</option><option value="pro">💎 Pro</option><option value="vip">👑 VIP</option></select>
+    </div>
+    <p class="muted" id="usersTotal"></p>
+    <div class="list" id="users"></div>
+    <button class="more" id="usersMore" hidden>Yana ko'rsatish</button>
+  </section>
+
+  <section id="tab-team" hidden>
+    <div class="card"><h2>Bosslar va adminlar</h2><div class="list" id="team"></div>
+      <p class="note">Admin qo'shish va huquqlarini o'zgartirish — botda: Boss paneli → «👮 Adminlar va huquqlar».</p></div>
+    <div class="card"><h2>Tariflar</h2><div class="scroll"><table id="plans"></table></div>
+      <p class="note">Narx va limitlarni o'zgartirish — botda: Boss paneli → «⚙️ Tariflar va narxlar».</p></div>
+    <div class="card"><h2>To'lov va aloqa</h2><div id="payInfo"></div></div>
+  </section>
+</div>
+
+<script>
+const tg = window.Telegram?.WebApp;
+tg?.ready();
+tg?.expand();
+try { if (tg?.isVersionAtLeast?.("8.0")) tg.requestFullscreen(); } catch {}
+if (tg?.colorScheme === "dark" || (!tg && matchMedia("(prefers-color-scheme: dark)").matches)) document.documentElement.dataset.theme = "dark";
+tg?.onEvent?.("themeChanged", () => { document.documentElement.dataset.theme = tg.colorScheme === "dark" ? "dark" : "light"; });
+
+const $ = (id) => document.getElementById(id);
+const initData = tg?.initData || "";
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const money = (n) => Math.round(Number(n) || 0).toLocaleString("ru-RU").replace(/,/g, " ") + " so'm";
+const PLAN = { free: "🆓 Bepul", standard: "⭐ Standard", pro: "💎 Pro", vip: "👑 VIP" };
+const STATUS = { pending: "⏳ Kutilmoqda", approved: "✅ Tasdiqlangan", rejected: "❌ Rad etilgan" };
+const pill = (plan) => `<span class="pill p-${esc(plan)}">${esc(PLAN[plan] || plan || "—")}</span>`;
+const who = (name, username, id) => esc(name || (id ? "ID " + id : "—")) + (username ? ` <span class="muted">@${esc(username)}</span>` : "");
+function date(iso, withTime) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (isNaN(d)) return "—";
+  const opt = { timeZone: "Asia/Tashkent", day: "2-digit", month: "2-digit", year: "numeric" };
+  if (withTime) Object.assign(opt, { hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleString("ru-RU", opt);
+}
+
+async function api(path) {
+  let res;
+  try { res = await fetch(path, { headers: { "X-Init-Data": initData } }); }
+  catch { throw new Error("Server bilan aloqa yo'q. Internetni tekshiring."); }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Xatolik yuz berdi.");
+  return data;
+}
+
+let D = null;
+
+// ---------- tablar ----------
+document.querySelectorAll(".tabs button").forEach((b) => b.onclick = () => openTab(b.dataset.tab));
+function openTab(name) {
+  document.querySelectorAll(".tabs button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === name)));
+  document.querySelectorAll("section").forEach((s) => s.hidden = s.id !== "tab-" + name);
+  if (name === "users" && !usersLoaded) loadUsers(true);
+  try { sessionStorage.setItem("bossTab", name); } catch {}
+}
+
+// ---------- yuklash ----------
+async function load() {
+  if (!initData) { $("state").textContent = "Bu sahifani botdagi «Boss paneli» tugmasi orqali oching."; return; }
+  $("state").hidden = false;
+  try { D = await api(`/api/boss/data?days=${$("days").value}`); }
+  catch (e) { $("state").textContent = e.message; return; }
+  $("state").hidden = true;
+  $("sub").textContent = `Salom, ${D.me || "Boss"}! Davr: oxirgi ${D.days} kun • yangilandi ${new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}`;
+  renderHome(); renderSales(); renderChecks(); renderTeam();
+  let tab = "home";
+  try { tab = sessionStorage.getItem("bossTab") || "home"; } catch {}
+  openTab(tab);
+}
+$("days").onchange = load;
+
+function renderHome() {
+  const s = D.summary, r = D.revenue;
+  const k = (l, v, n, cls = "") => `<div class="kpi ${cls}"><div class="l">${l}</div><div class="v">${v}</div><div class="n">${n}</div></div>`;
+  $("kpis").innerHTML = [
+    k(`Tushum (${D.days} kun)`, money(r.total), `${r.count} ta obuna sotildi`, "money"),
+    k("Faol obunachilar", s.subscribers, `⭐ ${s.by_plan.standard} • 💎 ${s.by_plan.pro} • 👑 ${s.by_plan.vip}`),
+    k("O'quvchilar", s.users, `bugun +${s.new_today} • hafta +${s.new_week}`),
+    k("Tekshiruvlar", s.checks_today, `bugun • hafta ${s.checks_week} • oy ${s.checks_month}`),
+    k("Faol o'quvchilar", s.active_week, "oxirgi 7 kunda mock ishlagan"),
+    k("Kutilayotgan cheklar", s.pending_payments, s.pending_payments ? "botda tasdiqlang" : "hammasi ko'rib chiqilgan"),
+  ].join("");
+  $("pendingBadge").hidden = !s.pending_payments;
+  $("pendingBadge").textContent = s.pending_payments;
+  const color = { standard: "var(--std)", pro: "var(--pro)", vip: "var(--vip)" };
+  const maxSum = Math.max(1, ...r.by_plan.map((p) => p.sum));
+  $("planBars").innerHTML = r.by_plan.map((p) => `<div class="bar"><span>${esc(p.icon)} ${esc(p.name)}</span>
+    <div class="track"><div class="fill" style="width:${(100 * p.sum / maxSum).toFixed(1)}%;background:${color[p.plan]}"></div></div>
+    <span class="num">${p.count} ta • ${money(p.sum)}</span></div>`).join("");
+  $("revNote").textContent = r.approx ? `Aniq to'langan: ${money(r.exact)} • taxminiy (≈): ${money(r.approx)} — summasi yozilmagan qo'lda berilgan obunalar.` : "Hamma summalar aniq.";
+  const maxSub = Math.max(1, ...Object.values(s.by_plan));
+  $("subBars").innerHTML = ["standard", "pro", "vip"].map((p) => `<div class="bar"><span>${PLAN[p]}</span>
+    <div class="track"><div class="fill" style="width:${(100 * s.by_plan[p] / maxSub).toFixed(1)}%;background:${color[p]}"></div></div>
+    <span class="num">${s.by_plan[p]} ta</span></div>`).join("") +
+    `<p class="muted">Jami ${s.users} o'quvchidan ${s.subscribers} tasi obunachi. Mocklar: ${s.mocks} ta. Bloklangan: ${s.blocked}.</p>`;
+  drawChart();
+}
+
+function drawChart() {
+  const svg = $("chart");
+  const days = [];
+  for (let i = 13; i >= 0; i--) {
+    const d = new Date(Date.now() + 5 * 3600e3 - i * 864e5);
+    days.push(d.toISOString().slice(0, 10));
+  }
+  const by = Object.fromEntries(D.activity.map((a) => [a.day, a]));
+  const W = svg.clientWidth || 600, H = 170, padL = 28, padB = 22, padT = 8;
+  const max = Math.max(1, ...days.map((d) => (by[d]?.speaking || 0) + (by[d]?.writing || 0)));
+  const step = (W - padL) / days.length, bw = Math.max(4, step * 0.62);
+  const y = (v) => padT + (H - padT - padB) * (1 - v / max);
+  let out = `<line x1="${padL}" x2="${W}" y1="${y(0)}" y2="${y(0)}" stroke="var(--line)"/>`;
+  out += `<text x="${padL - 6}" y="${y(max) + 4}" text-anchor="end" font-size="11" fill="var(--hint)">${max}</text>`;
+  out += `<text x="${padL - 6}" y="${y(0) + 4}" text-anchor="end" font-size="11" fill="var(--hint)">0</text>`;
+  days.forEach((d, i) => {
+    const s = by[d]?.speaking || 0, w = by[d]?.writing || 0, x = padL + i * step + (step - bw) / 2;
+    if (s) out += `<rect x="${x}" y="${y(s)}" width="${bw}" height="${y(0) - y(s)}" rx="2" fill="var(--cobalt)"><title>${d}: Konuşma ${s}</title></rect>`;
+    if (w) out += `<rect x="${x}" y="${y(s + w)}" width="${bw}" height="${y(s) - y(s + w)}" rx="2" fill="var(--turq)"><title>${d}: Yazma ${w}</title></rect>`;
+    if (i % 2 === 1 || days.length <= 7) out += `<text x="${x + bw / 2}" y="${H - 6}" text-anchor="middle" font-size="10.5" fill="var(--hint)">${d.slice(8, 10)}.${d.slice(5, 7)}</text>`;
+  });
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.innerHTML = out;
+}
+addEventListener("resize", () => D && drawChart());
+
+function renderSales() {
+  const q = $("salesQ").value.trim().toLowerCase(), plan = $("salesPlan").value;
+  const rows = D.purchases.filter((p) => (!plan || p.plan === plan) &&
+    (!q || [p.buyer, p.buyer_username, p.admin, p.admin_username, String(p.buyer_id)].some((x) => String(x || "").toLowerCase().includes(q))));
+  const total = rows.reduce((a, p) => a + p.sum, 0);
+  $("salesSum").textContent = `${rows.length} ta obuna • jami ${money(total)}`;
+  $("sales").innerHTML = rows.length ? rows.map((p) => `<div class="row">
+      <div class="top"><span class="who">${who(p.buyer, p.buyer_username, p.buyer_id)}</span>
+        <span class="sum ${p.exact ? "" : "approx"}">${p.exact ? "" : "≈ "}${money(p.sum)}</span></div>
+      <div class="meta">${pill(p.plan)}<span>${p.days} kun</span><span>📅 ${date(p.date, true)}</span><span>⏳ ${date(p.until)} gacha</span></div>
+      <div class="meta"><span>✔️ Tasdiqladi: ${who(p.admin, p.admin_username, p.admin_id)}</span><span>ID ${esc(p.buyer_id)}</span></div>
+    </div>`).join("") : `<div class="state">Bu davrda obuna sotilmagan.</div>`;
+}
+$("salesQ").oninput = renderSales;
+$("salesPlan").onchange = renderSales;
+
+function renderChecks() {
+  const st = $("chkStatus").value;
+  const rows = D.payments.filter((p) => !st || p.status === st);
+  $("checks").innerHTML = rows.length ? rows.map((p) => `<div class="row">
+      <div class="top"><span class="who">#${p.id} • ${who(p.name, p.username, p.user_id)}</span><span class="pill s-${esc(p.status)}">${STATUS[p.status] || esc(p.status)}</span></div>
+      <div class="meta"><span>Tanlagan tarifi: ${pill(p.plan)}</span>${p.decided_plan && p.decided_plan !== p.plan ? `<span>Berilgan: ${pill(p.decided_plan)}</span>` : ""}<span>📅 ${date(p.date, true)}</span></div>
+      ${p.status !== "pending" ? `<div class="meta"><span>Ko'rib chiqdi: ${who(p.admin, p.admin_username)}</span><span>${date(p.decided_at, true)}</span></div>` : ""}
+    </div>`).join("") : `<div class="state">Chek yo'q.</div>`;
+}
+$("chkStatus").onchange = renderChecks;
+
+// ---------- o'quvchilar (serverdan, 30 tadan) ----------
+let usersLoaded = false, usersOffset = 0, usersTimer = null;
+async function loadUsers(reset) {
+  usersLoaded = true;
+  if (reset) { usersOffset = 0; $("users").innerHTML = ""; }
+  const q = encodeURIComponent($("userQ").value.trim()), plan = $("userPlan").value;
+  try {
+    const d = await api(`/api/boss/users?q=${q}&plan=${plan}&offset=${usersOffset}`);
+    $("usersTotal").textContent = `Topildi: ${d.total} ta o'quvchi`;
+    $("users").insertAdjacentHTML("beforeend", d.users.map((u) => `<div class="row">
+        <div class="top"><span class="who">${who(u.name, u.username, u.id)}${u.blocked ? ' <span class="pill s-rejected">bloklangan</span>' : ""}</span>${pill(u.plan)}</div>
+        <div class="meta"><span>🎙 ${u.speaking} • ✍️ ${u.writing} tekshiruv</span>${u.until ? `<span>⏳ ${date(u.until)} gacha</span>` : ""}</div>
+        <div class="meta"><span>Qo'shilgan: ${date(u.joined)}</span><span>Oxirgi faollik: ${date(u.last, true)}</span><span>ID ${u.id}</span></div>
+      </div>`).join("") || (usersOffset ? "" : `<div class="state">Hech kim topilmadi.</div>`));
+    usersOffset += d.users.length;
+    $("usersMore").hidden = usersOffset >= d.total;
+  } catch (e) { $("usersTotal").textContent = e.message; }
+}
+$("userQ").oninput = () => { clearTimeout(usersTimer); usersTimer = setTimeout(() => loadUsers(true), 350); };
+$("userPlan").onchange = () => loadUsers(true);
+$("usersMore").onclick = () => loadUsers(false);
+
+function renderTeam() {
+  $("team").innerHTML = D.team.map((a) => `<div class="row">
+      <div class="top"><span class="who">${who(a.name, a.username, a.id)}</span><span class="pill ${a.boss ? "p-vip" : ""}">${a.boss ? "👑 Boss" : "👮 Admin"}</span></div>
+      <div class="meta">${a.perms.length ? a.perms.map((p) => `<span class="pill">${esc(p)}</span>`).join("") : "<span>Hech bir bo'lim ochilmagan</span>"}</div>
+      <div class="meta"><span>ID ${a.id}</span>${a.added_at ? `<span>Qo'shilgan: ${date(a.added_at)}</span>` : ""}</div>
+    </div>`).join("");
+  const lim = (v) => v == null ? "cheksiz" : v;
+  $("plans").innerHTML = `<tr><th>Tarif</th><th>Narx</th><th>Konuşma</th><th>Yazma</th><th>Ekspert</th></tr>` +
+    D.plans.map((p) => `<tr><td>${esc(p.icon)} ${esc(p.name)}</td><td class="num">${p.price ? money(p.price) : "—"}</td>
+      <td class="num">${lim(p.speaking)}</td><td class="num">${lim(p.writing)}</td><td class="num">${p.raters}</td></tr>`).join("");
+  $("payInfo").innerHTML = `<p>💳 Karta: <b>${esc(D.card || "kiritilmagan")}</b></p><p>💬 O'quvchilar yozadigan admin: <b>${esc(D.contact)}</b></p>
+    <p class="note">O'zgartirish — botda: Boss paneli → «⚙️ Tariflar va narxlar».</p>`;
+}
+
+load();
+</script>
+</body>
+</html>

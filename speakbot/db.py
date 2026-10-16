@@ -890,7 +890,7 @@ async def results_report(days: int | None = None):
     )
 
 
-async def users_for_api(plan: str | None, since: str | None, limit: int, offset: int):
+async def users_for_api(plan: str | None, since: str | None, limit: int, offset: int, q: str | None = None):
     """GET /api/users uchun: ro'yxatdan o'tgan foydalanuvchilar, tarifi va topshirgan testlari soni.
     Har bir qatorda `total` - filtr bo'yicha jami soni (sahifalash uchun)."""
     now = _now().strftime(_FMT)
@@ -901,6 +901,15 @@ async def users_for_api(plan: str | None, since: str | None, limit: int, offset:
     if since:
         where.append("joined_at >= ?")
         params.append(since)
+    if q and q.strip():  # Boss sayti: ism, @username yoki ID bo'yicha qidiruv
+        q = q.strip().lstrip("@")
+        pats = like_variants(q)
+        ors = ["full_name LIKE ?"] * len(pats) + ["username LIKE ?"] * len(pats)
+        params += pats + pats
+        if q.isdigit():
+            ors.append("telegram_id = ?")
+            params.append(int(q))
+        where.append("(" + " OR ".join(ors) + ")")
     cond = ("WHERE " + " AND ".join(where)) if where else ""
     return await _fetchall(
         f"""SELECT *, COUNT(*) OVER () AS total FROM (
@@ -918,6 +927,36 @@ async def users_for_api(plan: str | None, since: str | None, limit: int, offset:
            ORDER BY joined_at DESC, telegram_id LIMIT ? OFFSET ?""",
         tuple(params) + (limit, offset),
     )
+
+
+async def list_payments(limit: int = 50):
+    """Boss sayti: oxirgi to'lov cheklari (kim yubordi, qaysi tarif, holati, kim hal qildi)."""
+    return await _fetchall(
+        """SELECT p.id, p.telegram_id, p.plan, p.status, p.decided_plan, p.created_at, p.decided_at,
+                  u.full_name, u.username, a.full_name AS admin_name, a.username AS admin_username
+           FROM payments p LEFT JOIN users u ON u.telegram_id = p.telegram_id
+                LEFT JOIN users a ON a.telegram_id = p.decided_by
+           ORDER BY p.id DESC LIMIT ?""",
+        (limit,),
+    )
+
+
+async def daily_activity(days: int = 14):
+    """Boss sayti: kunlik tekshiruvlar (Toshkent sanasi bo'yicha) - Konuşma va Yazma alohida."""
+    rows = await _fetchall(
+        f"""SELECT d, SUM(s) AS speaking, SUM(w) AS writing FROM (
+              SELECT date(created_at, '+5 hours') AS d, 1 AS s, 0 AS w FROM attempts
+              WHERE status = 'done' AND created_at >= datetime('now', '-{int(days)} days')
+              UNION ALL
+              SELECT date(created_at, '+5 hours'), 0, 1 FROM writing_submissions
+              WHERE status = 'done' AND created_at >= datetime('now', '-{int(days)} days'))
+            GROUP BY d ORDER BY d"""
+    )
+    return rows
+
+
+async def count_pending_payments() -> int:
+    return (await _fetchone("SELECT COUNT(*) AS c FROM payments WHERE status = 'pending'"))["c"]
 
 
 # ---------- Adminlar ----------
@@ -1068,8 +1107,12 @@ async def count_active_premium(plan: str | None = None) -> int:
 async def grants_since(days: int = 30):
     """Boss hisoboti uchun: so'nggi N kunda berilgan obunalar (kim bergan bilan)."""
     return await _fetchall(
-        f"""SELECT l.plan, l.days, l.amount, l.granted_by, l.created_at, a.full_name AS admin_name
+        f"""SELECT l.id, l.telegram_id, l.plan, l.days, l.amount, l.granted_by, l.created_at,
+                   a.full_name AS admin_name, a.username AS admin_username,
+                   u.full_name AS buyer_name, u.username AS buyer_username, p.until AS until
             FROM premium_log l LEFT JOIN users a ON a.telegram_id = l.granted_by
+                 LEFT JOIN users u ON u.telegram_id = l.telegram_id
+                 LEFT JOIN premium p ON p.telegram_id = l.telegram_id
             WHERE l.action = 'grant' AND l.created_at >= datetime('now', '-{int(days)} days')
             ORDER BY l.id DESC"""
     )
@@ -1189,6 +1232,16 @@ async def load_settings():
 def setting(key: str, default: str = "") -> str:
     """Keshdan sinxron o'qish (init_db / set_setting keshni yangilab turadi)."""
     return _settings.get(key) or default
+
+
+def admin_contact() -> str:
+    """O'quvchilar yozadigan admin (@username): Boss sozlamasi, bo'lmasa Render'dagi ADMIN_CONTACT."""
+    custom = setting("admin_contact").strip().lstrip("@")
+    return "@" + custom if custom else config.ADMIN_CONTACT
+
+
+def admin_link() -> str:
+    return "https://t.me/" + admin_contact().lstrip("@")
 
 
 async def get_setting(key: str, default: str = "") -> str:
