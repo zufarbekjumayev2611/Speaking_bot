@@ -63,7 +63,7 @@ Kalitni almashtirish uchun Render'da `USERS_API_KEY` ni o'zgartirib, qayta deplo
 
 ## 📚 Mocklar
 
-O'quvchi menyusida bitta **«📚 Mocklar»** tugmasi: mock → 🎙 Konuşma | ✍️ Yazma.
+O'quvchi menyusida **«🎙 Konuşma»** va **«✍️ Yazma»** tugmalari: bo'lim → mock (10 tadan) → Full mock yoki alohida qism.
 - **Konuşma:** 🔥 *Full mock* — Part 1.1 → 1.2 → 2 → 3 ketma-ket (natija: qismlar yig'indisi /21 va taxminiy
   standart ball /75), yoki istalgan qismni alohida (Part 1.1, 1.2, 2, 3).
 - **Yazma:** 🔥 *Full mock* (1 va 2-qism, 60 daqiqa, /75), yoki faqat 1-qism (2 xat) / 2-qism (blog).

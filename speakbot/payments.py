@@ -210,7 +210,7 @@ async def pay_approve(callback: CallbackQuery):
             pay["telegram_id"],
             f"🎉 <b>To'lovingiz tasdiqlandi!</b>\n{e(plans.name(plan))} faollashtirildi — "
             f"<b>{_local(until)}</b> gacha.\nHar 30 kunda: {plans.limits_text(plan)}"
-            + (" • 2 ekspert baholashi" if plans.raters_for(plan) > 1 else "") + ".\n\n«📚 Mocklar» — omad! 🚀",
+            + (" • 2 ekspert baholashi" if plans.raters_for(plan) > 1 else "") + ".\n\n«🎙 Konuşma» va «✍️ Yazma» — omad! 🚀",
             parse_mode="HTML")
         note = ""
     except Exception:

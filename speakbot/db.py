@@ -670,16 +670,18 @@ async def mock_done_parts(telegram_id: int, mock_id: int) -> list[tuple[str, str
     return [(r["kind"], r["part"]) for r in rows]
 
 
-async def mocks_done(telegram_id: int) -> set[int]:
-    """O'quvchi kamida bir qismini ishlagan mocklar (ro'yxatda ✅ belgisi uchun)."""
-    rows = await _fetchall(
-        """SELECT DISTINCT e.mock_id FROM attempts a JOIN exams e ON e.id = a.exam_id
-           WHERE a.telegram_id = ? AND a.status = 'done' AND e.mock_id IS NOT NULL
-           UNION
-           SELECT DISTINCT e.mock_id FROM writing_submissions w JOIN exams e ON e.id = w.exam_id
-           WHERE w.telegram_id = ? AND w.status = 'done' AND e.mock_id IS NOT NULL""",
-        (telegram_id, telegram_id),
-    )
+async def mocks_done(telegram_id: int, kind: str | None = None) -> set[int]:
+    """O'quvchi kamida bir qismini ishlagan mocklar (ro'yxatda ✅ belgisi uchun); kind - faqat shu bo'lim."""
+    sp = """SELECT DISTINCT e.mock_id FROM attempts a JOIN exams e ON e.id = a.exam_id
+            WHERE a.telegram_id = ? AND a.status = 'done' AND e.mock_id IS NOT NULL"""
+    wr = """SELECT DISTINCT e.mock_id FROM writing_submissions w JOIN exams e ON e.id = w.exam_id
+            WHERE w.telegram_id = ? AND w.status = 'done' AND e.mock_id IS NOT NULL"""
+    if kind == "speaking":
+        rows = await _fetchall(sp, (telegram_id,))
+    elif kind == "writing":
+        rows = await _fetchall(wr, (telegram_id,))
+    else:
+        rows = await _fetchall(f"{sp} UNION {wr}", (telegram_id, telegram_id))
     return {r["mock_id"] for r in rows}
 
 
