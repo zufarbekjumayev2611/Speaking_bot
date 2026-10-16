@@ -163,6 +163,24 @@ async def pay_receipt_wrong(message: Message):
 
 # ---------------------------------------------------------------- admin
 
+@router.callback_query(F.data.startswith("pchk:"))
+async def pay_card_again(callback: CallbackQuery):
+    """Boss panelidagi «Cheklar» ro'yxatidan: chek rasmini tasdiqlash tugmalari bilan qayta ko'rsatish."""
+    if not is_admin(callback.from_user.id) or not roles.can(callback.from_user.id, "premium"):
+        return await callback.answer("🔒 Bu amal sizga yopiq.", show_alert=True)
+    pay = await db.get_payment(int(callback.data.split(":")[1]))
+    if not pay or pay["status"] != "pending":
+        return await callback.answer("Bu chek allaqachon ko'rib chiqilgan.", show_alert=True)
+    u = await db.get_user(pay["telegram_id"]) or {}
+    handle = f" @{e(u['username'])}" if u.get("username") else ""
+    caption = (f"💳 <b>To'lov cheki #{pay['id']}</b>\n👤 {e(u.get('full_name') or pay['telegram_id'])}{handle} "
+               f"(<code>{pay['telegram_id']}</code>)\n📦 Tanlagan tarifi: <b>{e(_plan_line(pay['plan']))}</b>\n\n"
+               f"Pul tushganini tekshiring va summaga mos tarifni bosing — obuna {PAY_DAYS} kunga beriladi.")
+    send = callback.message.answer_photo if pay["file_type"] == "photo" else callback.message.answer_document
+    await send(pay["file_id"], caption=caption, parse_mode="HTML", reply_markup=_admin_kb(pay["id"], pay["plan"]))
+    await callback.answer()
+
+
 async def _close_card(callback: CallbackQuery, line: str):
     try:
         old = callback.message.caption or ""

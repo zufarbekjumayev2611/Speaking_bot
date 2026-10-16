@@ -1,5 +1,6 @@
 """👑 Boss paneli (faqat ADMIN_IDS dagi asosiy adminlar): tushum, adminlar va ularning huquqlari,
 tarif/narx sozlamalari, tizim holati. Adminlar ro'yxati va qo'shish/o'chirish - premium.py da."""
+import asyncio
 import html
 import re
 import time
@@ -78,30 +79,43 @@ async def _money(days: int = 30) -> dict:
 
 
 async def boss_view():
-    m = await _money(30)
-    admins = await db.list_admins()
-    stats = await db.get_stats()
-    plan_line = " • ".join(f"{plans.PLANS[p]['icon']} {m['by_plan'].get(p, [0])[0]}" for p in plans.PAID)
-    approx = "" if m["exact"] else " <i>(bir qismi taxminiy)</i>"
+    """👑 Boss paneli - hamma narsa bir joyda: bugungi holat, pul, jamoa, va barcha bo'limlar tugmalari."""
+    m, admins, st, pending = await asyncio.gather(_money(30), db.list_admins(), db.get_stats(),
+                                                  db.count_pending_payments())  # parallel - bitta kutish
+    plan_line = f"⭐ {st['standard']} • 💎 {st['pro']} • 👑 {st['vip']}"
+    approx = "" if m["exact"] else " <i>(≈ bir qismi)</i>"
+    wait = f"⏳ Kutilayotgan cheklar: <b>{pending}</b> — tasdiqlang 👇" if pending else "✅ Kutilayotgan chek yo'q"
     lines = [
-        "👑 <b>Boss paneli</b>",
+        "👑 <b>BOSS PANELI</b>",
         LINE,
-        f"💰 30 kunlik tushum: <b>{plans.money(m['total'])}</b>{approx}",
-        f"🧾 Sotilgan obunalar: <b>{len(m['rows'])}</b> ta ({plan_line})",
-        f"💎 Hozir faol obunachilar: <b>{stats['premium']}</b> • 👥 O'quvchilar: <b>{stats['users']}</b>",
-        f"👮 Boshqaruv: <b>{len(ADMIN_IDS)}</b> boss + <b>{len(admins)}</b> admin",
+        "📅 <b>Bugun</b>",
+        f"   👤 Yangi o'quvchilar: <b>+{st['new_today']}</b> • 🎯 Tekshiruvlar: <b>{st['today']}</b>",
+        f"   {wait}",
+        "",
+        "💰 <b>Oxirgi 30 kun</b>",
+        f"   Tushum: <b>{plans.money(m['total'])}</b>{approx} • {len(m['rows'])} ta obuna",
+        f"   Faol obunachilar: <b>{st['premium']}</b> ({plan_line})",
+        "",
+        "👥 <b>O'quvchilar</b>",
+        f"   Jami: <b>{st['users']}</b> • hafta: +{st['new_week']} • faol (7 kun): {st['active_week']}",
+        f"   📚 Mocklar: <b>{st['mocks']}</b> • 🎯 30 kunda tekshiruv: {st['month']}",
+        "",
+        f"👮 <b>Jamoa:</b> {len(ADMIN_IDS)} boss • {len(admins)} admin",
         LINE,
-        "🖥 <b>Boss sayti</b> — hammasi bitta to'liq ekranda: tushum, kim nima sotib oldi, o'quvchilar, cheklar, adminlar.",
+        "<i>Hamma bo'lim shu yerda. Tez ochish: /boss</i>",
     ]
+    B = _b
     rows = []
     if WEBAPP_URL.startswith("https://"):
-        rows.append([InlineKeyboardButton(text="🖥 Boss saytini ochish (to'liq ekran)",
+        rows.append([InlineKeyboardButton(text="🖥 Boss sayti — to'liq ekran",
                                           web_app=WebAppInfo(url=f"{WEBAPP_URL}/boss?t={int(time.time())}"))])
     rows += [
-        [_b("👮 Adminlar va huquqlar", "adm_admins")],
-        [_b("💰 Tushum hisoboti", "boss_money"), _b("⚙️ Tariflar va narxlar", "adm_settings")],
-        [_b("🩺 Tizim holati", "boss_sys")],
-        [_b("⬅️ Admin panel", "admin")],
+        [B("💰 Tushum hisoboti", "boss_money"), B(f"⏳ Cheklar ({pending})" if pending else "🧾 Cheklar", "boss_chk")],
+        [B("👮 Adminlarni boshqarish", "adm_admins")],
+        [B("⚙️ Tariflar, narx, karta", "adm_settings"), B("🩺 Tizim holati", "boss_sys")],
+        [B("📚 Mocklar", "adm_exams"), B("👥 Foydalanuvchilar", "adm_users:0")],
+        [B("💎 Premium", "adm_prem"), B("📊 Natijalar", "results:0")],
+        [B("📣 Xabar yuborish", "adm_bc"), B("📈 Statistika", "adm_stats")],
     ]
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -117,6 +131,27 @@ async def boss_menu(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     text, kb = await boss_view()
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "boss_chk")
+async def boss_checks(callback: CallbackQuery):
+    """Ko'rib chiqilmagan to'lov cheklari: bosilsa - chek rasmi tasdiqlash tugmalari bilan qayta yuboriladi."""
+    if not _boss(callback):
+        return await callback.answer("Faqat Boss uchun.", show_alert=True)
+    rows = await db.pending_payments(10)
+    lines = ["🧾 <b>Kutilayotgan to'lov cheklari</b>", LINE]
+    kb = []
+    if not rows:
+        lines.append("Hammasi ko'rib chiqilgan ✅")
+    for p in rows:
+        lines.append(f"#{p['id']} • {person(p.get('full_name'), p.get('username'), p['telegram_id'])} — "
+                     f"{plans.name(p.get('plan') or 'standard')} • {_date(p['created_at'])}")
+        kb.append([_b(f"🧾 #{p['id']} — {(p.get('full_name') or str(p['telegram_id']))[:24]}", f"pchk:{p['id']}")])
+    if rows:
+        lines.append("\nChekni bosing — rasmi tasdiqlash tugmalari bilan chiqadi.")
+    kb.append([_b("⬅️ Boss paneli", "boss")])
+    await callback.message.edit_text("\n".join(lines), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
     await callback.answer()
 
 
@@ -189,16 +224,24 @@ async def boss_system(callback: CallbackQuery):
 # ---------- Admin huquqlari ----------
 
 async def perms_view(uid: int):
-    user = await db.get_user(uid) or {}
-    name = e(user.get("full_name") or uid)
+    user, act, admins = await asyncio.gather(db.get_user(uid), db.admin_activity(30), db.list_admins())
+    user = user or {}
+    row = next((x for x in admins if x["telegram_id"] == uid), {})
+    name = person(user.get("full_name"), user.get("username"), uid)
     perms = roles.perms_of(uid)
-    lines = [f"🔐 <b>{name}</b> — huquqlar", LINE, "Bo'limni bosib yoqing (✅) yoki yoping (❌):"]
+    a = act.get(uid) or {}
+    lines = [f"🔐 <b>{name}</b> — admin", LINE,
+             f"🆔 <code>{uid}</code> • qo'shilgan: {_date(row.get('added_at'))}",
+             f"📈 30 kunda: {a.get('grants', 0)} ta obuna berdi, {a.get('checks', 0)} ta chekni ko'rib chiqdi",
+             f"🔓 Ochiq bo'limlar: <b>{len(perms)}</b> / {len(roles.SECTIONS)}", "",
+             "Bo'limni bosib yoqing (✅) yoki yoping (❌):"]
     rows = [[_b(f"{'✅' if key in perms else '❌'} {label}", f"prm:{uid}:{key}")]
             for key, (label, _) in roles.SECTIONS.items()]
     rows.append([_b("✅ Hammasini ochish", f"prm:{uid}:all"), _b("❌ Hammasini yopish", f"prm:{uid}:none")])
     rows.append([_b("🗑 Adminlikdan olish", f"adr:{uid}")])
     rows.append([_b("⬅️ Adminlar", "adm_admins")])
-    lines.append("\n<i>Tariflar, narxlar va adminlarni faqat Boss boshqaradi.</i>")
+    lines.append("\n<i>💎 Premium ochiq bo'lsa — to'lov cheklari ham shu adminga keladi. Tariflar, narxlar, "
+                 "karta va adminlarni faqat Boss boshqaradi.</i>")
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
 
 

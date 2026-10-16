@@ -5,6 +5,7 @@ Admin:     👥 Foydalanuvchilar (karta -> premium berish / bloklash), 💎 Prem
            ⚙️ Sozlamalar (limitlar, to'lov matni), 📈 Statistika.
 To'lov QO'LDA kiritiladi: admin tarif va muddatni tanlab, to'lov izohini yozadi.
 """
+import asyncio
 import html
 import logging
 from datetime import datetime, timedelta
@@ -586,21 +587,30 @@ async def info_save(message: Message, state: FSMContext):
 # ======================================================================
 
 async def _admins_view(viewer_id: int):
+    """👮 Adminlarni boshqarish: kim boss, kim admin, qaysi bo'limlari ochiq va 30 kunda nima qildi."""
     import roles  # aylana importdan qochish uchun shu yerda
-    lines = ["👮 <b>Adminlar va huquqlar</b>\n", "👑 <b>Boss</b> (Render'dagi ADMIN_IDS — hamma huquq, o'chirib bo'lmaydi):"]
-    for uid in ADMIN_IDS:
-        u = await db.get_user(uid) or {"telegram_id": uid}
-        lines.append(f"• {_who(u)}")
-    extra = await db.list_admins()
-    lines.append("\n👮 <b>Adminlar</b> (bosib huquqlarini o'zgartiring):" if extra else "\nQo'shilgan adminlar yo'q.")
+    extra, act = await asyncio.gather(db.list_admins(), db.admin_activity(30))
+    bosses = await asyncio.gather(*[db.get_user(uid) for uid in ADMIN_IDS])
+
+    def stats(uid: int) -> str:
+        a = act.get(uid) or {}
+        return f"30 kunda: {a.get('grants', 0)} obuna, {a.get('checks', 0)} chek"
+
+    lines = ["👮 <b>Adminlarni boshqarish</b>", "━━━━━━━━━━━━━━━━",
+             f"👑 <b>Bosslar</b> — {len(ADMIN_IDS)} ta (hamma huquq; Render'dagi ADMIN_IDS, botdan o'chirilmaydi):"]
+    for uid, u in zip(ADMIN_IDS, bosses):
+        lines.append(f"• {_who(u or {'telegram_id': uid})}\n   <i>{stats(uid)}</i>")
+    lines.append(f"\n👮 <b>Adminlar</b> — {len(extra)} ta:" if extra else "\n👮 Hali admin qo'shilmagan.")
     rows = []
     for a in extra:
         perms = roles.perms_of(a["telegram_id"])
         summary = ("hamma bo'lim" if perms == set(roles.SECTIONS) else
-                   ", ".join(roles.SECTIONS[k][0].split(" ", 1)[1] for k in roles.SECTIONS if k in perms) or "hech narsa")
-        lines.append(f"• {_who(a)} — <i>{e(summary)}</i>")
-        label = (a.get("full_name") or str(a["telegram_id"]))[:30]
-        rows.append([_btn(f"🔐 {label}", f"prm:{a['telegram_id']}")])
+                   ", ".join(roles.SECTIONS[k][0].split(" ", 1)[1] for k in roles.SECTIONS if k in perms) or "hech narsa ochilmagan")
+        lines.append(f"• {_who(a)}\n   🔐 {e(summary)}\n   <i>{stats(a['telegram_id'])}</i>")
+        label = (a.get("full_name") or str(a["telegram_id"]))[:28]
+        rows.append([_btn(f"🔐 {label} — huquqlar", f"prm:{a['telegram_id']}")])
+    lines.append("\n<i>Adminni bosing — bo'limlarini yoqing/yoping yoki adminlikdan oling.</i>" if extra else
+                 "\n<i>Admin — yordamchi: siz ochgan bo'limlar bilan ishlaydi (masalan, faqat chek tasdiqlash).</i>")
     rows.append([_btn("➕ Admin qo'shish", "ad_add")])
     rows.append([_btn("⬅️ Boss paneli", "boss")])
     return "\n".join(lines), _kb(rows)
@@ -719,7 +729,8 @@ async def users_menu(callback: CallbackQuery, state: FSMContext):
 
 async def _user_card(user: dict):
     uid = user["telegram_id"]
-    prem = await db.get_premium(uid)
+    prem, usage_line, results, hist = await asyncio.gather(  # parallel - karta bitta kutishda ochiladi
+        db.get_premium(uid), usage_text(uid), db.user_results(uid, 5), db.premium_history(uid, 3))
     plan = "vip" if is_admin(uid) else (prem["plan"] if prem else "free")
     status = f"{e(plans.name(plan))}" + (f" — <b>{_local(prem['until'])}</b> gacha" if prem else "")
     if is_admin(uid):
@@ -729,16 +740,14 @@ async def _user_card(user: dict):
     lines = [
         f"👤 {_who(user)}",
         status,
-        await usage_text(uid),
+        usage_line,
     ]
-    results = await db.user_results(uid, 5)
     if results:
         lines.append("\n<b>Oxirgi natijalar:</b>")
         for r in results:
             icon = "✍️" if r["kind"] == "writing" else "🎙"
             score = f"{float(r['raw_score']):g}" if r.get("raw_score") is not None else str(r["score"])
             lines.append(f"{icon} {e(r['title'] or '?')} — {score} ({e(r['level'])})")
-    hist = await db.premium_history(uid, 3)
     if hist:
         lines.append("\n<b>Premium tarixi:</b>")
         for h in hist:

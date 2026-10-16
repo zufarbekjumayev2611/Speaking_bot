@@ -1,6 +1,7 @@
 """Foydalanuvchi tekshiruv olishi mumkinmi: tarif bo'yicha Konuşma va Yazma limiti ALOHIDA, MOCK bilan o'lchanadi.
 Mockni birinchi marta ishlaganda limitdan 1 ta olinadi; shu davrda uning qismlari, full mock va qayta
 ishlashlar bepul. Bepul - kalendar oy; pullik - obunaning joriy 30 kunlik davri. Adminlar - cheklovsiz."""
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 import config
@@ -37,12 +38,48 @@ def period_bounds(until: str | None) -> tuple[str | None, str | None]:
     return start.strftime(_FMT), (nxt.strftime(_FMT) if nxt < end else None)
 
 
+def _in_period(stamp: str | None, start: str | None, now_month: str) -> bool:
+    """Ish shu limit davriga kiradimi: pullik - `start` dan keyin, bepul - shu kalendar oyda (UTC+5)."""
+    if not stamp:
+        return False
+    if start:
+        return stamp >= start
+    try:
+        return (datetime.strptime(stamp[:19], _FMT) + timedelta(hours=5)).strftime("%Y-%m") == now_month
+    except ValueError:
+        return False
+
+
+def _period_rows(rows: list[dict], start: str | None) -> list[dict]:
+    now_month = (datetime.now(timezone.utc) + timedelta(hours=5)).strftime("%Y-%m")
+    return [r for r in rows if _in_period(r.get("created_at"), start, now_month)]
+
+
+def count_used(rows: list[dict], kind: str, start: str | None) -> int:
+    """Sarflangan limit (db.count_checks bilan bir xil qoida): davrda ochilgan har mock 1 ta, mockka kirmagan
+    eski testlarda har tekshiruv 1 ta, o'zi yaratgan (eski) shaxsiy test - yaratilganda 1 ta."""
+    mocks, n = set(), 0
+    for r in _period_rows(rows, start):
+        if r["kind"] == kind and not r.get("own"):
+            if r.get("mock_id"):
+                mocks.add(r["mock_id"])
+            else:
+                n += 1
+        elif r["kind"] == "own_" + kind:
+            n += 1
+    return n + len(mocks)
+
+
 async def usage(user_id: int, kind: str) -> dict:
-    """{plan, used, limit (None - cheksiz), next_reset (UTC matn yoki None), until}."""
-    prem = None if is_admin(user_id) else await db.get_premium(user_id)
+    """{plan, used, limit (None - cheksiz), next_reset (UTC matn yoki None), until}. Bazaga ko'pi bilan 1 so'rov
+    (o'quvchining yakunlangan ishlari va tarifi xotirada keshlanadi)."""
+    if is_admin(user_id):
+        prem, rows = None, await db.user_done(user_id)
+    else:  # tarif va ishlar parallel olinadi (keshda bo'lmasa ham - bitta kutish)
+        prem, rows = await asyncio.gather(db.get_premium(user_id), db.user_done(user_id))
     plan = "vip" if is_admin(user_id) else (prem["plan"] if prem else "free")
     start, nxt = period_bounds(prem["until"] if prem else None)
-    used = await db.count_checks(user_id, kind, start)
+    used = count_used(rows, kind, start)
     return {"plan": plan, "used": used, "limit": plans.limit_for(plan, kind), "next_reset": nxt,
             "until": prem["until"] if prem else None}
 
@@ -62,7 +99,8 @@ async def mock_opened(user_id: int, kind: str, exam: dict | None) -> bool:
         return False
     prem = await db.get_premium(user_id)
     start, _ = period_bounds(prem["until"] if prem else None)
-    return await db.mock_used(user_id, kind, exam["mock_id"], start)
+    mock_id = exam["mock_id"]
+    return any(r["kind"] == kind and r.get("mock_id") == mock_id for r in _period_rows(await db.user_done(user_id), start))
 
 
 async def check_access(user_id: int, kind: str, _extra: int = 0, exam: dict | None = None) -> tuple[bool, str]:
@@ -170,7 +208,10 @@ async def done_parts(user_id: int, mock_id: int | None) -> dict[str, set[str]]:
     out: dict[str, set[str]] = {"speaking": set(), "writing": set()}
     if not mock_id or is_admin(user_id):
         return out
-    for kind, part in await db.mock_done_parts(user_id, mock_id):
+    for r in await db.user_done(user_id):
+        if r.get("mock_id") != mock_id or r["kind"] not in out:
+            continue
+        kind, part = r["kind"], r.get("part")
         if kind == "writing":
             out["writing"] |= {"1", "2"} if part == "full" else {part}
         else:
@@ -191,3 +232,18 @@ async def already_done(user_id: int, exam: dict | None, part: str | None = None)
     if kind == "writing" and part == "full":
         return bool(done)
     return part in done
+
+
+async def mocks_done(user_id: int, kind: str | None = None) -> set[int]:
+    """O'quvchi kamida bir qismini ishlagan mocklar (✅ belgisi) - keshdan, bazaga qo'shimcha so'rovsiz."""
+    return {r["mock_id"] for r in await db.user_done(user_id)
+            if r.get("mock_id") and (r["kind"] == kind if kind else r["kind"] in ("speaking", "writing"))}
+
+
+async def done_counts(user_id: int) -> dict:
+    """{"speaking": n, "writing": m} - jami yakunlangan ishlar (profil uchun)."""
+    out = {"speaking": 0, "writing": 0}
+    for r in await db.user_done(user_id):
+        if r["kind"] in out:
+            out[r["kind"]] += 1
+    return out

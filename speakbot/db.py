@@ -570,6 +570,50 @@ async def delete_exam(exam_id: int):
     await _execute("DELETE FROM exams WHERE id = ?", (exam_id,))
 
 
+# ---------- O'quvchining yakunlangan ishlari (limit, ✅ belgilari, qayta ishlash taqiqi) - bitta so'rovda ----------
+# Har tugmada limit, ochilgan mocklar va ishlangan qismlar kerak: avval bular 3-5 ta alohida so'rov edi.
+# Endi o'quvchining hamma yakunlangan ishi bitta so'rovda olinib, xotirada turadi; yangi ish yakunlanganda
+# (finish_attempt / finish_writing_submission) kesh tozalanadi.
+_done_cache: dict[int, tuple[float, list[dict]]] = {}
+DONE_TTL = 600
+
+
+async def user_done(telegram_id: int) -> list[dict]:
+    """[{kind: speaking | writing | own_speaking | own_writing, mock_id, part, created_at, own}] - eng yangisi oxirida."""
+    cached = _done_cache.get(telegram_id)
+    if cached and time.time() - cached[0] < DONE_TTL:
+        return cached[1]
+    rows = await _fetchall(
+        """SELECT 'speaking' AS kind, e.mock_id AS mock_id, e.part AS part, t.created_at AS created_at,
+                  CASE WHEN e.owner_id = t.telegram_id THEN 1 ELSE 0 END AS own
+           FROM attempts t LEFT JOIN exams e ON e.id = t.exam_id
+           WHERE t.telegram_id = ? AND t.status = 'done'
+           UNION ALL
+           SELECT 'writing', e.mock_id, COALESCE(json_extract(t.result_json, '$.part'), e.part), t.created_at,
+                  CASE WHEN e.owner_id = t.telegram_id THEN 1 ELSE 0 END
+           FROM writing_submissions t LEFT JOIN exams e ON e.id = t.exam_id
+           WHERE t.telegram_id = ? AND t.status = 'done'
+           UNION ALL
+           SELECT 'own_' || COALESCE(x.kind, 'speaking'), NULL, NULL, x.created_at, 1
+           FROM exams x WHERE x.owner_id = ?""",
+        (telegram_id, telegram_id, telegram_id),
+    )
+    _done_cache[telegram_id] = (time.time(), rows)
+    return rows
+
+
+def forget_user(telegram_id: int):
+    _done_cache.pop(telegram_id, None)
+    _premium_cache.pop(telegram_id, None)
+
+
+async def fetch_many(queries: list[tuple[str, tuple]]) -> list[list[dict]]:
+    """Bir nechta o'qish so'rovi - Turso'ga BITTA tarmoq murojaatida (har murojaat ~0.2 s)."""
+    if _turso:
+        return [r.rows for r in await _turso.batch(queries)]
+    return [await _fetchall(sql, params) for sql, params in queries]
+
+
 # ---------- Mocklar: har biri 4 ta Konuşma qismi (1.1, 1.2, 2, 3) + 1 ta to'liq Yazma ----------
 
 MOCK_SPEAKING_PARTS = ("1.1", "1.2", "2", "3")
@@ -630,17 +674,15 @@ async def list_mocks_page(offset: int = 0, limit: int = 10, query: str | None = 
             pats = like_variants(q)
             where = "(" + " OR ".join("m.title LIKE ?" for _ in pats) + ")"
             params = pats
-    total = (await _fetchone(f"SELECT COUNT(*) AS c FROM mocks m WHERE {where}", tuple(params)))["c"]
-    rows = await _fetchall(
+    count_rows, rows = await fetch_many([(f"SELECT COUNT(*) AS c FROM mocks m WHERE {where}", tuple(params)), (
         f"""SELECT m.*,
                    (SELECT COUNT(*) FROM exams e WHERE e.mock_id = m.id AND e.kind = 'speaking'
                       AND EXISTS (SELECT 1 FROM questions q WHERE q.exam_id = e.id)) AS sp_ready,
                    (SELECT COUNT(*) FROM exams e WHERE e.mock_id = m.id AND e.kind = 'writing'
                       AND EXISTS (SELECT 1 FROM questions q WHERE q.exam_id = e.id)) AS wr_ready
             FROM mocks m WHERE {where} ORDER BY m.number, m.id LIMIT ? OFFSET ?""",
-        tuple(params) + (limit, offset),
-    )
-    return rows, total
+        tuple(params) + (limit, offset))])
+    return rows, count_rows[0]["c"]
 
 
 async def delete_mock(mock_id: int):
@@ -650,6 +692,7 @@ async def delete_mock(mock_id: int):
         ("DELETE FROM exams WHERE mock_id = ?", (mock_id,)),
         ("DELETE FROM mocks WHERE id = ?", (mock_id,)),
     ])
+    _done_cache.clear()
 
 
 async def rename_mock(mock_id: int, title: str):
@@ -809,6 +852,7 @@ async def finish_attempt(attempt_id: int, score: int, level: str, result: dict, 
         "UPDATE attempts SET status = 'done', score = ?, raw_score = ?, level = ?, result_json = ? WHERE id = ?",
         (score, raw, level, json.dumps(result, ensure_ascii=False), attempt_id),
     )
+    _done_cache.clear()
 
 
 # ---------- Writing ishlari ----------
@@ -845,6 +889,7 @@ async def finish_writing_submission(submission_id: int, score: int, level: str, 
            WHERE id = ?""",
         (score, raw, level, json.dumps(result, ensure_ascii=False), submission_id),
     )
+    _done_cache.clear()
 
 
 # ---------- Natijalar (admin uchun) ----------
@@ -955,6 +1000,28 @@ async def daily_activity(days: int = 14):
     return rows
 
 
+async def pending_payments(limit: int = 10):
+    return await _fetchall(
+        """SELECT p.*, u.full_name, u.username FROM payments p LEFT JOIN users u ON u.telegram_id = p.telegram_id
+           WHERE p.status = 'pending' ORDER BY p.id LIMIT ?""", (limit,))
+
+
+async def admin_activity(days: int = 30) -> dict:
+    """{admin_id: {"grants": n, "checks": m}} - kim nechta obuna berdi va nechta chekni ko'rib chiqdi."""
+    grants, checks = await fetch_many([
+        (f"""SELECT granted_by AS uid, COUNT(*) AS c FROM premium_log WHERE action = 'grant'
+             AND created_at >= datetime('now', '-{int(days)} days') GROUP BY granted_by""", ()),
+        (f"""SELECT decided_by AS uid, COUNT(*) AS c FROM payments WHERE decided_by IS NOT NULL
+             AND decided_at >= datetime('now', '-{int(days)} days') GROUP BY decided_by""", ()),
+    ])
+    out: dict = {}
+    for r in grants:
+        out.setdefault(r["uid"], {"grants": 0, "checks": 0})["grants"] = r["c"]
+    for r in checks:
+        out.setdefault(r["uid"], {"grants": 0, "checks": 0})["checks"] = r["c"]
+    return out
+
+
 async def count_pending_payments() -> int:
     return (await _fetchone("SELECT COUNT(*) AS c FROM payments WHERE status = 'pending'"))["c"]
 
@@ -1019,9 +1086,20 @@ def _now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+# Tarif har tugma bosilganda kerak - xotirada saqlanadi (bazaga har safar ~0.2 s ketardi). Faqat shu yerdagi
+# grant_premium / revoke_premium o'zgartiradi va keshni yangilaydi; zaxira muddat - PREMIUM_TTL.
+_premium_cache: dict[int, tuple[float, dict | None]] = {}
+PREMIUM_TTL = 600
+
+
 async def get_premium(telegram_id: int) -> dict | None:
     """Faol premium: {"until": ..., "plan": "standard" | "pro" | "vip"} yoki None (tugagan / yo'q)."""
-    row = await _fetchone("SELECT until, plan FROM premium WHERE telegram_id = ?", (telegram_id,))
+    cached = _premium_cache.get(telegram_id)
+    if cached and time.time() - cached[0] < PREMIUM_TTL:
+        row = cached[1]
+    else:
+        row = await _fetchone("SELECT until, plan FROM premium WHERE telegram_id = ?", (telegram_id,))
+        _premium_cache[telegram_id] = (time.time(), row)
     if row and row["until"] > _now().strftime(_FMT):
         return {"until": row["until"], "plan": row["plan"] or "pro"}
     return None
@@ -1035,6 +1113,7 @@ async def get_premium_until(telegram_id: int) -> str | None:
 async def grant_premium(telegram_id: int, days: int, amount: str, granted_by: int, plan: str = "pro") -> str:
     """Premiumni `days` kunga uzaytiradi (faol bo'lsa - tugash sanasiga qo'shiladi), tarifni `plan` ga o'rnatadi.
     Yangi tugash vaqtini qaytaradi."""
+    _premium_cache.pop(telegram_id, None)
     current = await get_premium_until(telegram_id)
     base = datetime.strptime(current, _FMT) if current else _now()
     until = (base + timedelta(days=days)).strftime(_FMT)
@@ -1048,11 +1127,13 @@ async def grant_premium(telegram_id: int, days: int, amount: str, granted_by: in
         "INSERT INTO premium_log (telegram_id, action, plan, days, amount, granted_by) VALUES (?, 'grant', ?, ?, ?, ?)",
         (telegram_id, plan, days, amount, granted_by),
     )
+    _premium_cache[telegram_id] = (time.time(), {"until": until, "plan": plan})
     return until
 
 
 async def revoke_premium(telegram_id: int, revoked_by: int):
     await _execute("DELETE FROM premium WHERE telegram_id = ?", (telegram_id,))
+    _premium_cache[telegram_id] = (time.time(), None)
     await _execute(
         "INSERT INTO premium_log (telegram_id, action, granted_by) VALUES (?, 'revoke', ?)", (telegram_id, revoked_by)
     )
@@ -1212,11 +1293,12 @@ async def get_stats() -> dict:
              (SELECT COUNT(DISTINCT telegram_id) FROM (
                  SELECT telegram_id FROM attempts WHERE status = 'done' AND created_at >= datetime('now', '-7 days')
                  UNION SELECT telegram_id FROM writing_submissions WHERE status = 'done' AND created_at >= datetime('now', '-7 days'))) AS active_week,
-             (SELECT COUNT(*) FROM premium_log WHERE action = 'grant' AND created_at >= datetime('now', '-30 days')) AS grants_month"""
-    )
-    row["standard"] = await count_active_premium("standard")
-    row["pro"] = await count_active_premium("pro")
-    row["vip"] = await count_active_premium("vip")
+             (SELECT COUNT(*) FROM premium_log WHERE action = 'grant' AND created_at >= datetime('now', '-30 days')) AS grants_month,
+             (SELECT COUNT(*) FROM premium WHERE until > datetime('now') AND plan = 'standard') AS standard,
+             (SELECT COUNT(*) FROM premium WHERE until > datetime('now') AND plan = 'pro') AS pro,
+             (SELECT COUNT(*) FROM premium WHERE until > datetime('now') AND plan = 'vip') AS vip,
+             (SELECT COUNT(*) FROM mocks) AS mocks"""
+    )  # bitta so'rov: admin / Boss paneli tez ochilsin
     row["premium"] = row["standard"] + row["pro"] + row["vip"]
     return row
 

@@ -47,9 +47,8 @@ async def bc_menu(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         return await callback.answer()
     await state.clear()
-    rows = []
-    for key, label in AUDIENCES.items():
-        rows.append([_btn(f"{label} ({len(await db.broadcast_ids(key))})", f"bc_a:{key}")])
+    counts = await asyncio.gather(*[db.broadcast_ids(key) for key in AUDIENCES])  # parallel
+    rows = [[_btn(f"{label} ({len(ids)})", f"bc_a:{key}")] for (key, label), ids in zip(AUDIENCES.items(), counts)]
     rows.append([_btn("⬅️ Orqaga", "admin")])
     await callback.message.edit_text(
         "📣 <b>Ommaviy xabar</b>\n\nKimga yuboramiz? (Bloklanganlarga yuborilmaydi.)", parse_mode="HTML", reply_markup=_kb(rows)

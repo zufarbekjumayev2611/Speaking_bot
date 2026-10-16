@@ -74,6 +74,16 @@
   td, th { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--line); }
   th { color: var(--hint); font-weight: 600; font-size: 12.5px; }
   .scroll { overflow-x: auto; }
+  .chip { font: inherit; font-size: 13px; font-weight: 600; border: 1px solid var(--line); background: var(--surface2); color: var(--hint); padding: 5px 10px; border-radius: 999px; cursor: pointer; }
+  .chip[aria-pressed="true"] { background: color-mix(in srgb, var(--turq) 16%, transparent); border-color: var(--turq); color: var(--turq); }
+  .chip:disabled { opacity: .5; cursor: wait; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+  .act { font: inherit; font-size: 13px; font-weight: 650; border: 1px solid var(--line); background: transparent; color: var(--clay); padding: 6px 12px; border-radius: 10px; cursor: pointer; }
+  .act.confirm { background: var(--clay); color: #fff; border-color: var(--clay); }
+  .addrow { display: flex; gap: 8px; margin: 4px 0 10px; }
+  .addrow input { flex: 1; min-width: 0; }
+  .addrow button { font: inherit; font-weight: 650; border: 0; border-radius: 10px; background: var(--cobalt); color: #fff; padding: 8px 14px; cursor: pointer; white-space: nowrap; }
+  .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(16px + var(--safe-b)); background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 12px; font-size: 14px; max-width: calc(100% - 32px); z-index: 20; }
   [hidden] { display: none !important; }
   @media (prefers-reduced-motion: no-preference) { .fill { transition: width .5s ease; } }
 </style>
@@ -147,14 +157,20 @@
   </section>
 
   <section id="tab-team" hidden>
-    <div class="card"><h2>Bosslar va adminlar</h2><div class="list" id="team"></div>
-      <p class="note">Admin qo'shish va huquqlarini o'zgartirish — botda: Boss paneli → «👮 Adminlar va huquqlar».</p></div>
+    <div class="card"><h2>👮 Adminlarni boshqarish</h2>
+      <form class="addrow" id="addForm">
+        <input id="addQ" placeholder="Yangi admin: ID yoki @username" aria-label="Yangi admin ID yoki username" autocomplete="off">
+        <button type="submit">➕ Admin qilish</button>
+      </form>
+      <div class="list" id="team"></div>
+      <p class="note">Bo'limni bosing — admin uchun yoqiladi yoki yopiladi (darhol saqlanadi). 💎 Premium ochiq adminga to'lov cheklari ham keladi. Yangi admin avval botga /start yuborgan bo'lishi kerak.</p></div>
     <div class="card"><h2>Tariflar</h2><div class="scroll"><table id="plans"></table></div>
       <p class="note">Narx va limitlarni o'zgartirish — botda: Boss paneli → «⚙️ Tariflar va narxlar».</p></div>
     <div class="card"><h2>To'lov va aloqa</h2><div id="payInfo"></div></div>
   </section>
 </div>
 
+<div class="toast" id="toast" role="status" hidden></div>
 <script>
 const tg = window.Telegram?.WebApp;
 tg?.ready();
@@ -190,6 +206,23 @@ async function api(path) {
 }
 
 let D = null;
+
+async function post(path, body) {
+  let res;
+  try {
+    res = await fetch(path, { method: "POST", headers: { "X-Init-Data": initData, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  } catch { throw new Error("Server bilan aloqa yo'q. Internetni tekshiring."); }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Xatolik yuz berdi.");
+  return data;
+}
+
+let toastTimer = null;
+function toast(msg) {
+  $("toast").textContent = msg; $("toast").hidden = false;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => $("toast").hidden = true, 2600);
+  tg?.HapticFeedback?.notificationOccurred?.("success");
+}
 
 // ---------- tablar ----------
 document.querySelectorAll(".tabs button").forEach((b) => b.onclick = () => openTab(b.dataset.tab));
@@ -295,6 +328,34 @@ function renderChecks() {
 }
 $("chkStatus").onchange = renderChecks;
 
+// ---------- adminlarni boshqarish ----------
+function setTeam(admins) {
+  D.team = D.team.filter((t) => t.boss).concat(admins);
+  renderTeam();
+}
+$("team").addEventListener("click", async (ev) => {
+  const chip = ev.target.closest(".chip"), rm = ev.target.closest("[data-remove]");
+  if (chip) {
+    const row = chip.closest("[data-id]");
+    chip.setAttribute("aria-pressed", String(chip.getAttribute("aria-pressed") !== "true"));
+    const keys = [...row.querySelectorAll('.chip[aria-pressed="true"]')].map((c) => c.dataset.key);
+    row.querySelectorAll(".chip").forEach((c) => c.disabled = true);
+    try { setTeam((await post("/api/boss/admin", { action: "perms", id: Number(row.dataset.id), keys })).team); toast("Saqlandi ✅"); }
+    catch (e) { toast(e.message); renderTeam(); }
+  } else if (rm) {
+    if (!rm.classList.contains("confirm")) { rm.classList.add("confirm"); rm.textContent = "Tasdiqlang: olib tashlash"; return; }
+    try { setTeam((await post("/api/boss/admin", { action: "remove", id: Number(rm.dataset.remove) })).team); toast("Adminlikdan olindi"); }
+    catch (e) { toast(e.message); }
+  }
+});
+$("addForm").onsubmit = async (ev) => {
+  ev.preventDefault();
+  const q = $("addQ").value.trim();
+  if (!q) return toast("ID yoki @username yozing");
+  try { setTeam((await post("/api/boss/admin", { action: "add", query: q })).team); $("addQ").value = ""; toast("Admin qo'shildi ✅ — bo'limlarini belgilang"); }
+  catch (e) { toast(e.message); }
+};
+
 // ---------- o'quvchilar (serverdan, 30 tadan) ----------
 let usersLoaded = false, usersOffset = 0, usersTimer = null;
 async function loadUsers(reset) {
@@ -318,10 +379,14 @@ $("userPlan").onchange = () => loadUsers(true);
 $("usersMore").onclick = () => loadUsers(false);
 
 function renderTeam() {
-  $("team").innerHTML = D.team.map((a) => `<div class="row">
-      <div class="top"><span class="who">${who(a.name, a.username, a.id)}</span><span class="pill ${a.boss ? "p-vip" : ""}">${a.boss ? "👑 Boss" : "👮 Admin"}</span></div>
-      <div class="meta">${a.perms.length ? a.perms.map((p) => `<span class="pill">${esc(p)}</span>`).join("") : "<span>Hech bir bo'lim ochilmagan</span>"}</div>
-      <div class="meta"><span>ID ${a.id}</span>${a.added_at ? `<span>Qo'shilgan: ${date(a.added_at)}</span>` : ""}</div>
+  $("team").innerHTML = D.team.map((a) => a.boss ? `<div class="row">
+      <div class="top"><span class="who">${who(a.name, a.username, a.id)}</span><span class="pill p-vip">👑 Boss</span></div>
+      <div class="meta"><span>Hamma huquq • Render'dagi ADMIN_IDS</span><span>ID ${a.id}</span></div>
+    </div>` : `<div class="row" data-id="${a.id}">
+      <div class="top"><span class="who">${who(a.name, a.username, a.id)}</span><span class="pill">👮 Admin</span></div>
+      <div class="chips">${D.sections.map((s) => `<button class="chip" data-key="${esc(s.key)}" aria-pressed="${a.keys.includes(s.key)}">${esc(s.label)}</button>`).join("")}</div>
+      <div class="meta"><span>30 kunda: ${a.grants} obuna, ${a.checks} chek</span>${a.added_at ? `<span>Qo'shilgan: ${date(a.added_at)}</span>` : ""}<span>ID ${a.id}</span></div>
+      <div><button class="act" data-remove="${a.id}">Adminlikdan olish</button></div>
     </div>`).join("");
   const lim = (v) => v == null ? "cheksiz" : v;
   $("plans").innerHTML = `<tr><th>Tarif</th><th>Narx</th><th>Konuşma</th><th>Yazma</th><th>Ekspert</th></tr>` +

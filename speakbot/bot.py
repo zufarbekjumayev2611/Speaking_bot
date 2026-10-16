@@ -34,7 +34,8 @@ import grader
 import report
 import roles
 import writing
-from access import REDO_MSG, already_done, check_access, done_parts, get_plan, usage_block, usage_text
+from access import (REDO_MSG, already_done, check_access, done_counts, done_parts, mocks_done, usage_block,
+                    usage_text)
 from config import EXAM_LANGUAGE, WEBAPP_URL, is_admin, is_owner
 from languages import LANGUAGES
 from parts import WRITING_PARTS, part_info, parts_for, speaking_times
@@ -124,7 +125,6 @@ def main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
-    await db.save_user(message.from_user.id, message.from_user.full_name, message.from_user.username)
     admin = "\n\n⚙️ Siz adminsiz — pastdagi «Admin panel» orqali testlarni boshqarasiz." if is_admin(message.from_user.id) else ""
     await message.answer(
         f"{LANG['flag']} <b>{LANG['greeting']}, {e(message.from_user.first_name)}!</b> 👋\n\n"
@@ -236,8 +236,8 @@ async def my_result_open(callback: CallbackQuery):
 
 async def _profile_text(user) -> str:
     uid = user.id
-    row = await db.get_user(uid) or {}
-    counts = await db.my_result_counts(uid)
+    row, counts = await asyncio.gather(db.get_user(uid), done_counts(uid))
+    row = row or {}
     handle = f" • @{e(user.username)}" if user.username else ""
     since = f" • botda {report.local_date(row['joined_at'])[:10]} dan" if row.get("joined_at") else ""
     lines = ["👤 <b>Profil</b>", "━━━━━━━━━━━━━━━━", f"<b>{e(user.full_name)}</b>{handle}",
@@ -295,6 +295,17 @@ async def menu_admin(message: Message, state: FSMContext):
     await message.answer(text, parse_mode="HTML", reply_markup=kb)
 
 
+@router.message(Command("boss"))
+async def cmd_boss(message: Message, state: FSMContext):
+    """👑 /boss - faqat bosslar uchun: hamma narsa bir panelda."""
+    if not is_owner(message.from_user.id):
+        return await message.answer("Bunday buyruq yo'q. Bosh menyu: /start")
+    await state.clear()
+    from boss import boss_view  # boss.py bot.py ni import qilmaydi, lekin aylana bo'lmasin
+    text, kb = await boss_view()
+    await message.answer(text, parse_mode="HTML", reply_markup=kb)
+
+
 @router.message(F.text.startswith("/"))
 async def unknown_command(message: Message):
     """Noma'lum buyruq hech qachon nom / matn / izoh sifatida saqlanib qolmasin."""
@@ -302,7 +313,7 @@ async def unknown_command(message: Message):
 
 
 _mock_cache: tuple[int, float, list] | None = None
-CATALOG_TTL = 60  # soniya: zaxira (bir nechta server nusxasi bo'lsa ham eskirgan ro'yxat uzoq qolmasin)
+CATALOG_TTL = 600  # soniya: zaxira (o'zgarishlar CATALOG_VERSION orqali darhol ko'rinadi)
 MOCK_PAGE = 10
 SP_PARTS = ("1.1", "1.2", "2", "3")
 
@@ -354,11 +365,13 @@ async def _mocks_view(user_id: int, page: int = 0, kind: str | None = None):
     """Mocklar ro'yxati: 10 tadan sahifa (yuzlab mock bo'lsa ham ekran yengil), ✅ - o'quvchi ishlaganlari.
     kind (speaking / writing) - pastki menyudagi «Konuşma» / «Yazma»: faqat shu bo'limi bor mocklar,
     mock bosilganda to'g'ridan-to'g'ri o'sha bo'lim ochiladi."""
-    mocks = [m for m in await _mock_catalog() if not kind or m[kind]]
+    catalog, _, _ = await asyncio.gather(  # keshda bo'lmaganlari parallel olinadi - bitta kutish
+        _mock_catalog(), db.user_done(user_id), db.get_premium(user_id))
+    mocks = [m for m in catalog if not kind or m[kind]]
     pages = max(1, -(-len(mocks) // MOCK_PAGE))
     page = min(max(page, 0), pages - 1)
     chunk = mocks[page * MOCK_PAGE:(page + 1) * MOCK_PAGE]
-    done = await db.mocks_done(user_id, kind) if chunk else set()
+    done = await mocks_done(user_id, kind) if chunk else set()
     if kind == "speaking":
         lines = [f"🎙 <b>{SPEAKING_NAME}</b>", "━━━━━━━━━━━━━━━━",
                  "Har bir mock — Part 1.1 → 1.2 → 2 → 3, xuddi imtihondagidek.",
@@ -578,10 +591,9 @@ def _wmode(exam: dict, mode: str | None) -> str | None:
 
 async def _open_writing_task(exam_id: int, user_id: int) -> tuple[dict | None, dict | None, dict]:
     """(mavzu, topshiriq qatori, maydonlar) - mavzu shu o'quvchiga ochiq va topshirig'i to'liq bo'lsagina."""
-    exam = await db.get_exam(exam_id)
+    exam, row = await asyncio.gather(db.get_exam(exam_id), db.get_writing_task(exam_id))  # parallel - bitta kutish
     if not db.exam_open_for(exam, user_id) or exam.get("kind") != "writing":
         return None, None, {}
-    row = await db.get_writing_task(exam_id)
     values = writing.task_values(exam.get("part"), row)
     if not row or writing.missing_fields(exam.get("part"), values):
         return None, None, {}
@@ -1081,7 +1093,7 @@ async def _admin_panel_view(user_id: int):
     title = "👑 <b>Boss</b> • Admin panel" if boss else "👨‍🏫 <b>Admin panel</b>"
     text = (
         f"{title}\n━━━━━━━━━━━━━━━━\n"
-        f"📚 Mocklar: <b>{await db.count_mocks()}</b>\n"
+        f"📚 Mocklar: <b>{st['mocks']}</b>\n"
         f"👥 O'quvchilar: <b>{st['users']}</b> (bugun +{st['new_today']})\n"
         f"💎 Obunachilar: <b>{st['premium']}</b>\n"
         f"🎯 Bugungi tekshiruvlar: <b>{st['today']}</b>\n━━━━━━━━━━━━━━━━"
@@ -1093,9 +1105,7 @@ async def _admin_panel_view(user_id: int):
     buttons = [B(text=label, callback_data=data) for key, label, data in items if key in perms]
     rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
     if boss:
-        rows.append([B(text="👑 Boss paneli", callback_data="boss")])
-        if WEBAPP_URL.startswith("https://"):
-            rows.append([B(text="🖥 Boss sayti (to'liq ekran)", web_app=WebAppInfo(url=f"{WEBAPP_URL}/boss?t={int(time.time())}"))])
+        rows.append([B(text="👑 Boss paneli — hammasi bir joyda (/boss)", callback_data="boss")])
     if not rows:
         text += "\n\n🔒 Sizga hali birorta bo'lim ochilmagan. Boss'dan ruxsat so'rang."
     return text, InlineKeyboardMarkup(inline_keyboard=rows)

@@ -15,7 +15,9 @@ import db
 
 
 TTL = 12 * 3600  # 12 soatdan beri tegilmagan yarim qolgan amal unutiladi (keyingi xabar eski amalga ketmasin)
-FRESH = 30       # xotiradagi nusxa necha soniya ishlatiladi (deploy paytida ikki nusxa bo'lsa ham chalkashmasin)
+# Xotiradagi nusxa necha soniya ishlatiladi. Bot bitta nusxada ishlaydi va holatni faqat o'zi yozadi, shuning uchun
+# nusxa ishonchli; avval 30 s edi - har 30 soniyalik jimlikdan keyin har tugma bazaga qo'shimcha so'rov yuborardi.
+FRESH = 900
 
 
 def _age(updated_at: str | None) -> float:
