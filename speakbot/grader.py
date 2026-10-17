@@ -343,6 +343,19 @@ def _clean_mistakes(mistakes, source: str, punct: bool = False) -> list:
     return clean
 
 
+def dedupe_mistakes(mistakes: list) -> list:
+    """Bir xato ikki marta chiqmasin: "Bir çok" va "Bir çok öğrenci" - bitta xato. Bir yozuvning "wrong" i
+    boshqasining ichida bo'lsa, kengroq (kontekstli) yozuv qoladi."""
+    keys = [_norm(m.get("wrong")) for m in mistakes]
+    out = []
+    for i, m in enumerate(mistakes):
+        k = keys[i]
+        if any(j != i and k and k in keys[j] and (k != keys[j] or j < i) for j in range(len(mistakes))):
+            continue
+        out.append(m)
+    return out
+
+
 def _merge_mistakes(lists: list, source: str, punct: bool = False) -> list:
     """Bir necha ekspert topgan xatolarni birlashtiradi (takrorlarsiz), ko'pi bilan MAX_MISTAKES ta."""
     seen, merged = set(), []
@@ -353,7 +366,7 @@ def _merge_mistakes(lists: list, source: str, punct: bool = False) -> list:
                 continue
             seen.add(key)
             merged.append(m)
-    return merged[:MAX_MISTAKES]
+    return dedupe_mistakes(merged)[:MAX_MISTAKES]
 
 
 async def _grade_component(kind: str, system: str, user: str, max_band: int, raters: int | None = None,
@@ -537,7 +550,7 @@ async def verify_mistakes(answer: str, mistakes: list[dict]) -> list[dict]:
             mistakes = _clean_mistakes(checked, answer, punct=True)
     if EXAM_LANGUAGE == "tr":
         mistakes = turkish_check.check_mistakes(mistakes, answer)
-    return mistakes[:MAX_MISTAKES]
+    return dedupe_mistakes(mistakes)[:MAX_MISTAKES]
 
 
 async def grade_writing(tasks, texts: dict, part: str | None, raters: int | None = None) -> dict:
