@@ -134,7 +134,7 @@ async def cmd_start(message: Message, state: FSMContext):
         f"🎙 <b>{SPEAKING_NAME}</b> — Part 1.1 → 1.2 → 2 → 3, real imtihondagidek\n"
         f"✍️ <b>{WRITING_NAME}</b> — 1-qism (2 xat) va 2-qism (blog), taymer bilan\n"
         "🔥 <b>Full mock</b> — hammasi ketma-ket, yoki istalgan qismni alohida ishlang\n"
-        "🏅 <b>Natija</b> — ball, daraja (A2–C1) va 50 tagacha xato tahlili\n"
+        "🏅 <b>Natija</b> — ball, daraja (A2–C1) va 25 tagacha xato tahlili\n"
         "━━━━━━━━━━━━━━━━\n"
         f"Boshlash uchun pastdan «{BTN_SPEAKING}» yoki «{BTN_WRITING}» ni tanlang 👇{admin}",
         parse_mode="HTML",
