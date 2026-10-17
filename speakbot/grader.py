@@ -39,7 +39,7 @@ log = logging.getLogger("grader")
 GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
 CLAUDE_URL = "https://api.anthropic.com/v1/messages"
 
-MAX_MISTAKES = 10        # har bir qism / matn uchun ko'rsatiladigan xatolar soni
+MAX_MISTAKES = 50        # har bir qism / matn uchun ko'rsatiladigan xatolar soni (eng ko'pi; xavflari - README)
 MAX_TIPS = 3             # har bir qism / matn uchun tavsiyalar
 MAX_TIPS_TOTAL = 5       # natijadagi jami tavsiyalar
 TG_LIMIT = 4000          # Telegram xabari 4096 belgidan oshmasin
@@ -89,8 +89,9 @@ _JSON_TAIL = """FAQAT quyidagi JSON'ni qaytar, boshqa hech narsa yozma:
 band - 0 dan {max_band} gacha BUTUN son, faqat yuqoridagi mezon tavsifiga mos ravishda.
 notes - har bir jihat bo'yicha 1-2 gaplik aniq izoh (nima yaxshi, nima yetishmaydi).
 mistakes - {source} boshidan oxirigacha tekshirib topilgan HAQIQIY xatolar, eng muhimidan boshlab,
-ko'pi bilan {max_mistakes} ta. Xato ko'p bo'lsa - {max_mistakes} tagacha yoz; kam bo'lsa - faqat borini yoz,
-to'qib chiqarma; xato bo'lmasa - bo'sh ro'yxat. Bir xil xato takrorlansa - bir marta yoz.
+ko'pi bilan {max_mistakes} ta. Topganingni HAMMASINI yoz, lekin faqat aniq xatolarni: sonni ko'paytirish uchun
+shubhali yoki to'g'ri joyni xato deb yozma, to'qib chiqarma; xato bo'lmasa - bo'sh ro'yxat. Bir xil xato
+takrorlansa - bir marta yoz.
 tips - ko'pi bilan {max_tips} ta amaliy tavsiya. Barcha izohlar O'ZBEK tilida (lotin yozuvida)."""
 
 
@@ -183,7 +184,7 @@ async def _ask_groq(system: str, user: str, json_mode: bool) -> str:
         "model": GRADER_MODEL,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
         "temperature": 0.2,
-        "max_completion_tokens": 4096,  # 10 tagacha xato + izohlar (+ modelning fikrlash tokenlari)
+        "max_completion_tokens": 12000,  # 50 tagacha xato + izohlar (+ modelning fikrlash tokenlari) - kesilib qolmasin
     }
     if json_mode:
         payload["response_format"] = {"type": "json_object"}
@@ -208,14 +209,14 @@ _SAMPLING_MODELS = ("claude-haiku-4-5", "claude-sonnet-4-5", "claude-sonnet-4-6"
 async def _ask_claude(system: str, user: str) -> str:
     payload = {
         "model": CLAUDE_MODEL,
-        # Haiku 5.5 avval o'ylaydi (fikrlash tokenlari ham shu chegaraga kiradi) - javob kesilib qolmasin
-        "max_tokens": 16000,
+        # Haiku 5.5 avval o'ylaydi (fikrlash tokenlari ham shu chegaraga kiradi) - 50 ta xatoli javob kesilib qolmasin
+        "max_tokens": 24000,
         "system": system,
         "messages": [{"role": "user", "content": user}],
     }
     if CLAUDE_MODEL.startswith(_SAMPLING_MODELS):
         payload["temperature"] = 0.2
-        payload["max_tokens"] = 3000
+        payload["max_tokens"] = 8000
     async with get_session().post(
         CLAUDE_URL,
         json=payload,
@@ -224,7 +225,7 @@ async def _ask_claude(system: str, user: str) -> str:
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
         },
-        timeout=aiohttp.ClientTimeout(total=120),
+        timeout=aiohttp.ClientTimeout(total=180),
     ) as resp:
         body = await resp.json(content_type=None)
         if resp.status != 200:

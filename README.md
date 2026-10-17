@@ -129,3 +129,23 @@ keshlanadi (yangi ish tugaganda / obuna berilganda yangilanadi), mustaqil so'rov
 xotirada turadi, webhook xabarlari fonda ishlanadi (`handle_in_background`). Ko'p tugmalar bazaga umuman bormaydi.
 Eng katta tezlik uchun Turso bazasi va Render servisi **bir xil mintaqada** bo'lsin (Boss → 🩺 Tizim holati →
 «Baza javob tezligi»: 100 ms dan past bo'lishi yaxshi).
+
+## ⚠️ Xatolar soni: 50 tagacha (admin talabi bilan)
+
+Natijada har bir qism / matn uchun **50 tagacha** xato ko'rsatiladi (avval 10 edi; `grader.py` → `MAX_MISTAKES`).
+Bu admin talabi bilan qilingan. Ma'lum xavflar:
+
+- **Noto'g'ri «xato»lar ko'payishi mumkin** — ro'yxat qancha uzun bo'lsa, AI to'g'ri so'zni ham xato deb ko'rsatishi
+  shuncha ko'p bo'ladi (masalan «saatine» holati). Ikkinchi tekshiruv va turkcha istisnolar tekshiruvi ko'pini olib
+  tashlaydi, lekin 100 % emas.
+- **AI xarajati oshadi** — xatosi ko'p (kuchsiz) o'quvchida bitta tekshiruv taxminan 1,5–2,5 baravar qimmatlashadi
+  (Yazma ~70 so'm → ~150–200 so'm). Xatosi kam o'quvchida deyarli o'zgarmaydi.
+- **Tekshiruv sekinlashadi** — ko'p xatoli matnda natija 10–30 soniya kechroq keladi; bir vaqtda ko'p odam
+  yuborsa navbat ham sekinroq yuradi.
+- **Natija xabari uzun** — 50 ta xatoli natija Telegram'da 2–3 xabarga bo'linib keladi (bot o'zi bo'ladi).
+- **O'quvchiga og'ir** — juda uzun ro'yxat o'quvchini charchatadi; xatolar muhimidan boshlab chiqadi.
+- **Konuşma'da** — nutq ovozdan matnga aylantiriladi; aylantirishdagi noaniqliklar ham «xato» bo'lib ko'rinishi
+  mumkin, ro'yxat uzun bo'lganda bu ko'proq seziladi.
+
+Javob kesilib qolmasligi uchun AI javob chegaralari oshirilgan (Groq 12 000, Claude 24 000 token, Claude kutish
+vaqti 180 soniya). Muammo bo'lsa — `MAX_MISTAKES` ni yana 10–25 ga qaytarish kifoya.
