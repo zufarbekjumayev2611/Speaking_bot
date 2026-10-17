@@ -17,6 +17,7 @@ Telegram bot: ko'p darajali (multilevel) imtihon uchun Speaking va Writing'ni AI
 | `EXAM_LANGUAGE` | yo'q | `tr` (standart) yoki `en` |
 | `GRADER_PROVIDER` | yo'q | `groq` (standart) yoki `claude` (`ANTHROPIC_API_KEY` ham kerak) |
 | `CLAUDE_MODEL` | yo'q | `claude-haiku-5-5` (standart, eng arzon) |
+| `WRITING_GRADER` | yo'q | `claude` (standart: Yazmani Claude baholaydi + xatolarni qayta tekshiradi; kalit bo'lmasa Groq) yoki `groq` |
 | `GRADER_CONCURRENCY` | yo'q | Bir vaqtda nechta AI so'rovi (standart `2`; Groq pullik rejasida oshirish mumkin) |
 
 AI band bo'lsa (429 «navbat band»), bot o'zi 4 → 10 → 20 soniya kutib qayta urinadi; baribir band bo'lsa va

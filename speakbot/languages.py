@@ -106,6 +106,19 @@ LANGUAGES = {
             "buzilishi, noto'g'ri so'z tanlash, so'z tartibi, o'zbekchadan so'zma-so'z tarjima"
         ),
         "lang_adj": "Turkcha",
+        # Baholovchi AI tez-tez adashadigan joylar - xatolar ro'yxati uchun qat'iy qoidalar
+        "mistake_rules": (
+            "TURK TILI - XATO DEB KO'RSATMASLIK KERAK BO'LGANLAR (bular to'g'ri):\n"
+            "• shart shakllari: \"taşınsa\" ham, \"taşınırsa\" ham to'g'ri (ma'no farqi bor, ikkalasi grammatik);\n"
+            "• norasmiy matnda erkin (devrik) so'z tartibi: \"çok zor olur benim için\" - to'g'ri;\n"
+            "• \"de/da\" bog'lovchisi \"ham\" ma'nosida (\"artmasına da sinirlendim\") - to'g'ri;\n"
+            "• ma'nosi o'zgarmaydigan uslubiy tanlov, sinonim, boshqacha ifoda - xato emas.\n"
+            "UNLI UYG'UNLIGI ISTISNOLARI (o'zlashgan so'zlar ingichka qo'shimcha oladi): saat → saati, saate, "
+            "saatine, saatler (saatı / saata / saatına - XATO); dikkat → dikkate; harf → harfi; hayal → hayali; "
+            "ihtimal → ihtimali; kabul → kabulü; kalp → kalbi; rol → rolü; kontrol → kontrolü; alkol → alkolü; "
+            "petrol → petrolü; sembol → sembolü. O'quvchi shunday xato qilsa - albatta ko'rsat; \"correct\" "
+            "maydonida bu so'zlarni faqat to'g'ri shaklda yoz."
+        ),
         "phrases": '"Bence...", "Bana göre...", "Örneğin...", "Sonuç olarak..."',
         "thinking_phrases": '"Şöyle söyleyeyim...", "Aslında..."',
         "writing_phrases": '"Ayrıca...", "Bununla birlikte...", "Bu nedenle...", "Sonuç olarak..."',
