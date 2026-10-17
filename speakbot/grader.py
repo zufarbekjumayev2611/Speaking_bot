@@ -39,7 +39,7 @@ log = logging.getLogger("grader")
 GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
 CLAUDE_URL = "https://api.anthropic.com/v1/messages"
 
-MAX_MISTAKES = 50        # har bir qism / matn uchun ko'rsatiladigan xatolar soni (eng ko'pi; xavflari - README)
+MAX_MISTAKES = 25        # har bir qism / matn uchun ko'rsatiladigan xatolar soni (eng ko'pi; xavflari - README)
 MAX_TIPS = 3             # har bir qism / matn uchun tavsiyalar
 MAX_TIPS_TOTAL = 5       # natijadagi jami tavsiyalar
 TG_LIMIT = 4000          # Telegram xabari 4096 belgidan oshmasin
@@ -184,7 +184,7 @@ async def _ask_groq(system: str, user: str, json_mode: bool) -> str:
         "model": GRADER_MODEL,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
         "temperature": 0.2,
-        "max_completion_tokens": 12000,  # 50 tagacha xato + izohlar (+ modelning fikrlash tokenlari) - kesilib qolmasin
+        "max_completion_tokens": 12000,  # 25 tagacha xato + izohlar (+ modelning fikrlash tokenlari) - kesilib qolmasin
     }
     if json_mode:
         payload["response_format"] = {"type": "json_object"}
@@ -209,7 +209,7 @@ _SAMPLING_MODELS = ("claude-haiku-4-5", "claude-sonnet-4-5", "claude-sonnet-4-6"
 async def _ask_claude(system: str, user: str) -> str:
     payload = {
         "model": CLAUDE_MODEL,
-        # Haiku 5.5 avval o'ylaydi (fikrlash tokenlari ham shu chegaraga kiradi) - 50 ta xatoli javob kesilib qolmasin
+        # Haiku 5.5 avval o'ylaydi (fikrlash tokenlari ham shu chegaraga kiradi) - 25 ta xatoli javob kesilib qolmasin
         "max_tokens": 24000,
         "system": system,
         "messages": [{"role": "user", "content": user}],
