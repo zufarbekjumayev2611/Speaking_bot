@@ -7,6 +7,7 @@ baholash mezonlari bo'yicha baholash:
   - ekspert bahosi rasmiy jadval bo'yicha 75 ballik standart ballga o'tkaziladi.
 Baholovchi: Groq (standart) yoki Claude - .env dagi GRADER_PROVIDER bo'yicha."""
 import asyncio
+import contextvars
 import html
 import json
 import logging
@@ -16,6 +17,7 @@ import aiohttp
 
 from config import (
     ANTHROPIC_API_KEY,
+    WRITING_GRADER,
     CLAUDE_MODEL,
     EXAM_LANGUAGE,
     GRADER_MODEL,
@@ -29,6 +31,7 @@ from languages import LANGUAGES
 from netclient import get_session
 from parts import LANGUAGE_FUNCTIONS, part_info
 from scoring import MAX_SCORE, level_for, standard_score
+import turkish_check
 
 LANG = LANGUAGES[EXAM_LANGUAGE]
 log = logging.getLogger("grader")
@@ -159,6 +162,8 @@ XATOLAR RO'YXATI QOIDALARI (juda muhim):
 - agar o'quvchi {LANG['lang_adj'].lower()} maxsus harflar o'rniga oddiy lotin harflarini yozgan bo'lsa
   (masalan klaviaturada bo'lmagani uchun), buni har bir so'zda alohida xato qilma - bitta umumiy
   izoh sifatida ayt.
+- "correct" ning o'zi ham 100% to'g'ri bo'lsin - yozishdan oldin uni qayta tekshir.
+{LANG.get('mistake_rules', '')}
 Xato turlari: grammatik, leksik, imlo va punktuatsiya, uslub ({LANG['mistake_types']}).
 Tavsiyalar yozma ish uchun: tuzilma, uslub, bog'lovchi iboralar ({LANG['writing_phrases']}).
 
@@ -246,10 +251,14 @@ BUSY = (429, 500, 502, 503, 529)  # vaqtinchalik: kutib qayta uriniladi
 RETRY_WAITS = (4, 10, 20)         # soniya; xizmat retry-after aytsa (60 s gacha) - o'shani kutamiz
 
 
+# Shu baholash qaysi xizmatni afzal ko'radi (masalan, Yazma - Claude); None - GRADER_PROVIDER
+_prefer: contextvars.ContextVar[str | None] = contextvars.ContextVar("grader_prefer", default=None)
+
+
 def _providers() -> list:
     """Asosiy xizmat va (kaliti bo'lsa) zaxira: Groq band bo'lsa - Claude, Claude band bo'lsa - Groq."""
     groq, claude = ("groq", _ask_groq_any), ("claude", _ask_claude)
-    if GRADER_PROVIDER == "claude":
+    if (_prefer.get() or GRADER_PROVIDER) == "claude" and ANTHROPIC_API_KEY:
         return [claude] + ([groq] if GROQ_API_KEY else [])
     return [groq] + ([claude] if ANTHROPIC_API_KEY else [])
 
@@ -264,7 +273,11 @@ async def _ask(system: str, user: str) -> str:
                     return await ask(system, user)
                 except GraderError as e:
                     if e.status not in BUSY:
-                        raise
+                        last = e
+                        if (name, ask) == _providers()[-1]:
+                            raise
+                        log.warning("%s xato qaytardi (%s) - zaxira xizmatga o'tamiz", name, e.status)
+                        break  # masalan, kalit noto'g'ri yoki balans tugagan - boshqa xizmat bilan davom
                     last = e
                     wait = e.retry_after if e.retry_after is not None else (RETRY_WAITS[i] if i < len(RETRY_WAITS) else 0)
                     if i >= len(RETRY_WAITS) or wait > 60:  # kunlik limit tugagan - zaxira xizmatga
@@ -304,7 +317,7 @@ def _soft(text) -> str:
     return re.sub(r"\s+", " ", str(text or "").casefold()).strip(" .,!?;:")
 
 
-def _clean_mistakes(mistakes, source: str) -> list:
+def _clean_mistakes(mistakes, source: str, punct: bool = False) -> list:
     """AI ba'zan to'g'ri so'zni "xato" deb ko'rsatadi (wrong == correct) yoki o'quvchi matnida yo'q
     narsani yozadi. Bunday yozuvlar o'quvchini chalg'itmasligi uchun olib tashlanadi."""
     src = _norm(source)
@@ -316,7 +329,12 @@ def _clean_mistakes(mistakes, source: str) -> list:
         if not wrong or not correct:
             continue
         # tenglikni apostrof va harflarni saqlagan holda tekshiramiz ("Taşkentte" ≠ "Taşkent'te")
-        if _soft(m.get("wrong")) == _soft(m.get("correct")):
+        # punct=True (yozma ish): faqat tinish belgisi farqi ham xato ("gördün mü." -> "gördün mü?");
+        # nutqda (punct=False) tinish belgilarini dastur qo'ygan - ular xato hisoblanmaydi
+        same = (re.sub(r"\s+", " ", str(m.get("wrong") or "").casefold()).strip() ==
+                re.sub(r"\s+", " ", str(m.get("correct") or "").casefold()).strip()) if punct else \
+            _soft(m.get("wrong")) == _soft(m.get("correct"))
+        if same:
             continue
         if src and wrong not in src:
             continue
@@ -325,11 +343,11 @@ def _clean_mistakes(mistakes, source: str) -> list:
     return clean
 
 
-def _merge_mistakes(lists: list, source: str) -> list:
+def _merge_mistakes(lists: list, source: str, punct: bool = False) -> list:
     """Bir necha ekspert topgan xatolarni birlashtiradi (takrorlarsiz), ko'pi bilan MAX_MISTAKES ta."""
     seen, merged = set(), []
     for mistakes in lists:
-        for m in _clean_mistakes(mistakes, source):
+        for m in _clean_mistakes(mistakes, source, punct):
             key = _norm(m["wrong"])
             if key in seen:
                 continue
@@ -357,7 +375,7 @@ async def _grade_component(kind: str, system: str, user: str, max_band: int, rat
         "raters": len(ok),
         "reason": str(first.get("reason") or ""),
         "notes": first["notes"],
-        "mistakes": _merge_mistakes([o.get("mistakes") for o in ok], source or user),
+        "mistakes": _merge_mistakes([o.get("mistakes") for o in ok], source or user, kind == "writing"),
         "tips": [str(t) for t in tips if str(t).strip()][:MAX_TIPS],
     }
 
@@ -433,6 +451,8 @@ async def grade_speaking(answers: list[dict], part: str | None, raters: int | No
         )
     source = "\n".join((a.get("transcript") or "") for a in answers)
     comp = await _grade_component("speaking", speaking_prompt(part), "\n\n".join(blocks), p["max"], raters, source)
+    if EXAM_LANGUAGE == "tr":  # turkcha istisnolar (saat -> saatine ...) - dastur o'zi tekshiradi
+        comp["mistakes"] = turkish_check.check_mistakes(comp["mistakes"], source)[:MAX_MISTAKES]
     comp.update(name=p["name"], max=p["max"], label=_label(p["labels"], comp["band"]))
     return _combine("speaking", part, p["name"], [comp])
 
@@ -475,6 +495,51 @@ def combine_mock(parts: list[dict], part_name: str = "Full mock — Konuşma") -
 
 # ---------------------------------------------------------------- writing
 
+VERIFY_PROMPT = f"""Sen tajribali {LANG['lang_name']} muharriri va imtihon eksperti san. Senga o'quvchi matni va boshqa
+ekspert topgan XATOLAR RO'YXATI beriladi. Har bir yozuvni qat'iy tekshir:
+1. "wrong" HAQIQATAN grammatik, imlo yoki leksik xatomi? Grammatik jihatdan to'g'ri muqobil shakl, uslubiy
+   tanlov, norasmiy matndagi erkin so'z tartibi xato EMAS -> "drop".
+2. "correct" ning O'ZI 100% to'g'rimi? Unda xato bo'lsa - to'g'rilangan variantni ber -> "fix".
+3. Ikkalasi ham to'g'ri va xato aniq bo'lsa -> "keep". Ozgina shubha bo'lsa ham -> "drop"
+   (o'quvchiga noto'g'ri tuzatish ko'rsatgandan ko'ra, xatoni ko'rsatmagan yaxshi).
+{LANG.get('mistake_rules', '')}
+"note" - o'zbek tilida qisqa izoh (faqat "fix" uchun). FAQAT JSON qaytar, boshqa hech narsa yozma:
+{{"items": [{{"i": 0, "verdict": "keep" | "fix" | "drop", "correct": "...", "note": "..."}}]}}"""
+
+
+async def verify_mistakes(answer: str, mistakes: list[dict]) -> list[dict]:
+    """Ikkinchi tekshiruv: topilgan har bir xato alohida tasdiqlanadi (noto'g'ri "xato" va noto'g'ri tuzatishlar
+    olib tashlanadi), keyin turkcha istisnolar dastur o'zi tekshiradi. Tekshiruv ishlamasa - ro'yxat saqlanadi."""
+    if mistakes:
+        listing = "\n".join(f"{i}. wrong: {m['wrong']} | correct: {m['correct']} | izoh: {m.get('note', '')}"
+                            for i, m in enumerate(mistakes))
+        try:
+            data = _extract_json(await _ask(VERIFY_PROMPT, f"O'QUVCHI MATNI:\n{answer}\n\nXATOLAR:\n{listing}"))
+            items = data.get("items")
+        except Exception:
+            log.warning("Xatolarni qayta tekshirib bo'lmadi - ro'yxat o'zgarishsiz", exc_info=True)
+            items = None
+        if isinstance(items, list):
+            verdicts = {}
+            for it in items:
+                try:
+                    verdicts[int(it.get("i"))] = it
+                except (TypeError, ValueError, AttributeError):
+                    continue
+            checked = []
+            for i, m in enumerate(mistakes):
+                v = verdicts.get(i) or {}
+                verdict = str(v.get("verdict") or "drop").lower()
+                if verdict == "keep":
+                    checked.append(m)
+                elif verdict == "fix" and str(v.get("correct") or "").strip():
+                    checked.append({**m, "correct": str(v["correct"]).strip(), "note": str(v.get("note") or m.get("note", ""))})
+            mistakes = _clean_mistakes(checked, answer, punct=True)
+    if EXAM_LANGUAGE == "tr":
+        mistakes = turkish_check.check_mistakes(mistakes, answer)
+    return mistakes[:MAX_MISTAKES]
+
+
 async def grade_writing(tasks, texts: dict, part: str | None, raters: int | None = None) -> dict:
     """tasks: {"email1": "...", ...} - har bir matn uchun topshiriq (yoki bitta umumiy matn - str).
     texts: {"email1": "...", "email2": "..."} (1-qism), {"essay": "..."} (2-qism) yoki uchalasi (to'liq)."""
@@ -493,10 +558,16 @@ async def grade_writing(tasks, texts: dict, part: str | None, raters: int | None
                 f"O'QUVCHI MATNI - {c['name']} ({words} so'z; talab: {c['words']}):\n{answer}"
             )
             res = await _grade_component("writing", writing_prompt(c), user, c["max"], raters, answer)
+            res["mistakes"] = await verify_mistakes(answer, res["mistakes"])
         res.update(name=c["name"], max=c["max"], words=words, label=_label(c["labels"], res["band"]))
         return res
 
-    results = await asyncio.gather(*[one(c) for c in comps])
+    # Yazma - Claude (turkchani aniqroq biladi); kaliti yo'q yoki ishlamasa _ask o'zi Groq'ga o'tadi
+    token = _prefer.set("claude" if WRITING_GRADER == "claude" else "groq")
+    try:
+        results = await asyncio.gather(*[one(c) for c in comps])
+    finally:
+        _prefer.reset(token)
     return _combine("writing", part, p["name"], list(results))
 
 

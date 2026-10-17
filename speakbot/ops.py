@@ -136,6 +136,8 @@ async def human_status(bot=None, technical: bool = False) -> str:
               f"🖥 Server: {server} • versiya <code>{VERSION}</code>",
               f"🗄 Baza: {base}",
               f"🤖 AI baholash: {ai}",
+              "✍️ Yazma: " + (f"Claude ({html.escape(config.CLAUDE_MODEL)}) + xatolarni qayta tekshirish"
+                             if config.WRITING_GRADER == "claude" and claude else "Groq (asosiy xizmat)"),
               "🎤 Ovozni matnga o'girish: Groq Whisper",
               f"⏱ Bir vaqtda AI so'rovlari: {config.GRADER_CONCURRENCY}",
               f"👑 Bosslar: {await _people(config.ADMIN_IDS)}",

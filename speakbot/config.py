@@ -45,7 +45,9 @@ GRADER_PROVIDER = os.getenv("GRADER_PROVIDER", "groq").strip().lower()
 if GRADER_PROVIDER not in ("groq", "claude"):
     raise RuntimeError("GRADER_PROVIDER faqat 'groq' yoki 'claude' bo'lishi mumkin.")
 GRADER_MODEL = os.getenv("GRADER_MODEL", "openai/gpt-oss-120b")          # Groq modeli
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-5-5")              # Claude modeli
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-5-5")
+# Yazma (writing) kim baholaydi: "claude" (standart - turkchani aniqroq biladi; ANTHROPIC_API_KEY bo'lmasa Groq) yoki "groq"
+WRITING_GRADER = os.getenv("WRITING_GRADER", "claude").strip().lower()              # Claude modeli
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
 if GRADER_PROVIDER == "claude" and not ANTHROPIC_API_KEY:
     raise RuntimeError("GRADER_PROVIDER=claude uchun ANTHROPIC_API_KEY kerak.")
