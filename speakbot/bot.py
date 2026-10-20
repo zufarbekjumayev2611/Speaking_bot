@@ -34,8 +34,8 @@ import grader
 import report
 import roles
 import writing
-from access import (REDO_MSG, already_done, check_access, done_counts, done_parts, mocks_done, usage_block,
-                    usage_text)
+from access import (REDO_MSG, TRIAL_ONLY_MSG, already_done, check_access, done_counts, done_parts, free_trial_only,
+                    mock_locked, mocks_done, usage_block, usage_text)
 from config import EXAM_LANGUAGE, WEBAPP_URL, is_admin, is_owner
 from languages import LANGUAGES
 from parts import WRITING_PARTS, part_info, parts_for, speaking_times
@@ -368,6 +368,10 @@ async def _mocks_view(user_id: int, page: int = 0, kind: str | None = None):
     catalog, _, _ = await asyncio.gather(  # keshda bo'lmaganlari parallel olinadi - bitta kutish
         _mock_catalog(), db.user_done(user_id), db.get_premium(user_id))
     mocks = [m for m in catalog if not kind or m[kind]]
+    trial_only = await free_trial_only(user_id)
+    if trial_only:  # bepul tarif: faqat sinov mock ko'rinadi, qolganlari - obunachilarga
+        trial = await db.trial_mock_id()
+        mocks = [m for m in mocks if m["id"] == trial]
     pages = max(1, -(-len(mocks) // MOCK_PAGE))
     page = min(max(page, 0), pages - 1)
     chunk = mocks[page * MOCK_PAGE:(page + 1) * MOCK_PAGE]
@@ -388,19 +392,30 @@ async def _mocks_view(user_id: int, page: int = 0, kind: str | None = None):
             f"✍️ <b>{WRITING_NAME}</b> (1 va 2-qism).",
             "🔥 <b>Full mock</b> — hammasi ketma-ket; vaqtingiz kam bo'lsa — istalgan qismni alohida ishlang.",
         ]
-    if config.PREMIUM_ENABLED and not is_admin(user_id):
+    B = InlineKeyboardButton
+    upgrade = [B(text=BTN_PREMIUM, callback_data="tariffs")]
+    if trial_only:
+        lines.append(f"\n{await usage_text(user_id)}\n<i>Bepul tarifda sizga 🎁 <b>1 ta sinov mock</b> ochiq — uni "
+                     "<b>bir marta</b> ishlaysiz. Qolgan barcha mocklar ⭐ Standard, 💎 Pro va 👑 VIP obunachilari "
+                     "uchun.</i>")
+    elif config.PREMIUM_ENABLED and not is_admin(user_id):
         lines.append(f"\n💼 {await usage_text(user_id)}\n<i>Mockni ochsangiz, limitdan 1 ta olinadi. Har bir qism "
                      "<b>bir marta</b> ishlanadi — ishlangan mockni qayta ishlab bo'lmaydi.</i>")
     if not mocks:
         lines.append("\nHozircha tayyor mock yo'q — tez orada qo'shiladi.")
-        return "\n".join(lines), None
-    lines.append(f"\n📋 Jami <b>{len(mocks)}</b> ta mock. ✅ — siz ishlaganlar. Tanlang 👇")
-    B = InlineKeyboardButton
+        return "\n".join(lines), (InlineKeyboardMarkup(inline_keyboard=[upgrade]) if trial_only else None)
+    if trial_only:
+        lines.append("\nTanlang 👇")
+    else:
+        lines.append(f"\n📋 Jami <b>{len(mocks)}</b> ta mock. ✅ — siz ishlaganlar. Tanlang 👇")
     open_cb = {"speaking": "mks", "writing": "mkw"}.get(kind, "mko")
     badges = (lambda m: "") if kind else (lambda m: " " + _mock_badges(m))
-    buttons = [B(text=f"{'✅ ' if m['id'] in done else ''}{m['title']}{badges(m)}"[:40],
+    gift = "🎁 " if trial_only else ""
+    buttons = [B(text=f"{'✅ ' if m['id'] in done else ''}{gift}{m['title']}{badges(m)}"[:40],
                  callback_data=f"{open_cb}:{m['id']}") for m in chunk]
     rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+    if trial_only:
+        rows.append(upgrade)
     suffix = f":{_KIND_KEY[kind]}" if kind else ""
     if pages > 1:
         nav = [B(text="◀️", callback_data=f"mk:{page - 1}{suffix}")] if page > 0 else []
@@ -463,6 +478,9 @@ async def _mock_or_alert(callback: CallbackQuery) -> dict | None:
     m = await _find_mock(int(callback.data.split(":")[1]))
     if not m:
         await callback.answer("Bu mock hozir yopiq.", show_alert=True)
+    elif await mock_locked(callback.from_user.id, {"mock_id": m["id"]}):  # eski xabardagi tugma
+        await callback.answer(TRIAL_ONLY_MSG, show_alert=True)
+        return None
     return m
 
 
@@ -893,14 +911,17 @@ async def _admin_mocks_view(page: int = 0, query: str | None = None):
              "Har bir mock: 🎙 Part 1.1, 1.2, 2, 3 + ✍️ Yazma (1 va 2-qism). Mockni ochib, qismlarini to'ldiring.\n"]
     B = InlineKeyboardButton
     buttons = []
+    trial = await db.trial_mock_id()
     for m in mocks:
         status = "✅" if m["sp_ready"] == len(SP_PARTS) and m["wr_ready"] else ("🟡" if m["sp_ready"] or m["wr_ready"] else "❗")
-        lines.append(f"{status} <b>{e(m['title'])}</b> — 🎙 {m['sp_ready']}/{len(SP_PARTS)} • ✍️ {'✓' if m['wr_ready'] else '—'}")
-        buttons.append(B(text=f"{status} {m['title']}"[:30], callback_data=f"mka:{m['id']}"))
+        gift = "🎁 " if m["id"] == trial else ""
+        lines.append(f"{status} {gift}<b>{e(m['title'])}</b> — 🎙 {m['sp_ready']}/{len(SP_PARTS)} • ✍️ {'✓' if m['wr_ready'] else '—'}")
+        buttons.append(B(text=f"{status} {gift}{m['title']}"[:30], callback_data=f"mka:{m['id']}"))
     if not mocks:
         lines.append("Hech narsa topilmadi." if query else "Hali mock yo'q — «➕ Yangi mock» bilan yarating.")
     else:
-        lines.append("\n✅ to'liq • 🟡 qisman (tayyor qismlari o'quvchilarga ko'rinadi) • ❗ bo'sh")
+        lines.append("\n✅ to'liq • 🟡 qisman (tayyor qismlari o'quvchilarga ko'rinadi) • ❗ bo'sh\n"
+                     "🎁 sinov mock — bepul foydalanuvchilar faqat shuni ko'radi (qolganlari — obunachilarga)")
     rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
     pages = max(1, -(-total // MOCK_PAGE))
     if pages > 1 and not query:
@@ -941,6 +962,12 @@ async def _admin_mock_view(mock_id: int):
     rows = [sp[i:i + 2] for i in range(0, len(sp), 2)] + rows
     lines.append("\nQismni bosing — savollar / topshiriqni qo'shasiz va tahrirlaysiz. Tayyor qismlar o'quvchilarga "
                  "darhol ko'rinadi; 🔥 Full mock — 4 ta Konuşma qismi ham tayyor bo'lganda.")
+    if await db.trial_mock_id() == mock_id:
+        lines.append("\n🎁 <b>Bu — sinov mock.</b> Bepul foydalanuvchilar faqat shu mockni ko'radi va bir marta ishlaydi; "
+                     "qolgan mocklar ⭐ Standard, 💎 Pro va 👑 VIP obunachilari uchun.")
+    else:
+        lines.append("\n🔒 Bu mock faqat obunachilarga ko'rinadi.")
+        rows.append([B(text="🎁 Sinov mock qilish", callback_data=f"mkat:{mock_id}")])
     rows.append([B(text="✏️ Nomini o'zgartirish", callback_data=f"mkar:{mock_id}"),
                  B(text="🗑 Mockni o'chirish", callback_data=f"mkad:{mock_id}")])
     rows.append([B(text="⬅️ Mocklar", callback_data="adm_exams")])
@@ -965,6 +992,20 @@ async def admin_mock_open(callback: CallbackQuery, state: FSMContext):
     text, kb = await _admin_mock_view(int(callback.data.split(":")[1]))
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mkat:"))
+async def admin_mock_trial(callback: CallbackQuery):
+    """Shu mockni 🎁 sinov mock qilish - bepul foydalanuvchilar faqat uni ko'radi."""
+    if not _admin_only(callback.from_user.id):
+        return await callback.answer()
+    mock_id = int(callback.data.split(":")[1])
+    if not await db.get_mock(mock_id):
+        return await callback.answer("Mock topilmadi.", show_alert=True)
+    await db.set_setting(db.TRIAL_KEY, str(mock_id))
+    text, kb = await _admin_mock_view(mock_id)
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer("🎁 Endi bu — sinov mock")
 
 
 @router.callback_query(F.data == "mka_new")

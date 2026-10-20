@@ -103,6 +103,34 @@ async def mock_opened(user_id: int, kind: str, exam: dict | None) -> bool:
     return any(r["kind"] == kind and r.get("mock_id") == mock_id for r in _period_rows(await db.user_done(user_id), start))
 
 
+# ---------------------------------------------------------------- 🎁 sinov mock (bepul tarif)
+# Bepul foydalanuvchiga faqat bitta sinov mock ko'rinadi va ochiladi (har qismi bir marta); qolgan mocklar -
+# faqat ⭐ Standard / 💎 Pro / 👑 VIP obunachilari uchun.
+
+TRIAL_ONLY_MSG = ("🔒 Bu mock faqat obunachilar uchun (⭐ Standard, 💎 Pro, 👑 VIP). Bepul tarifda — faqat 🎁 sinov "
+                  "mock. Tarifni «🚀 Tarifni yaxshilash» bo'limidan tanlang.")
+
+
+async def free_trial_only(user_id: int) -> bool:
+    """Bepul foydalanuvchi (premium tizimi yoqiq, admin emas, obunasi yo'q) - faqat sinov mock."""
+    return PREMIUM_ENABLED and not is_admin(user_id) and await get_plan(user_id) == "free"
+
+
+async def mock_locked(user_id: int, exam: dict | None) -> bool:
+    """Test sinov bo'lmagan mockning qismi va foydalanuvchi bepul tarifda - yopiq."""
+    if not exam or not exam.get("mock_id") or not await free_trial_only(user_id):
+        return False
+    return exam["mock_id"] != await db.trial_mock_id()
+
+
+async def trial_status(user_id: int) -> str:
+    """Bepul tarif bloki (profil, tarif sahifasi, mocklar ro'yxati uchun)."""
+    trial = await db.trial_mock_id()
+    if trial and trial in await mocks_done(user_id):
+        return "🎁 Sinov mock: <b>boshlangan ✅</b> — har qism bir marta; qolgan mocklar uchun tarif tanlang"
+    return "🎁 Sinov mock: <b>ochiq</b> — bir marta bepul ishlaysiz"
+
+
 async def check_access(user_id: int, kind: str, _extra: int = 0, exam: dict | None = None) -> tuple[bool, str]:
     """(ruxsat bormi, ruxsat yo'q bo'lsa foydalanuvchiga xabar). kind: speaking | writing.
     exam - shu davrda ochilgan mockning qismi (yoki o'quvchining eski shaxsiy testi) bo'lsa, limit olinmaydi."""
@@ -110,6 +138,8 @@ async def check_access(user_id: int, kind: str, _extra: int = 0, exam: dict | No
         return True, ""
     if user_id in config.BLOCKED_IDS:
         return False, "Siz botdan foydalanishdan chetlatilgansiz. Savollar bo'lsa admin bilan bog'laning."
+    if await mock_locked(user_id, exam):
+        return False, TRIAL_ONLY_MSG
     if not PREMIUM_ENABLED or is_own(exam, user_id):
         return True, ""
     if _extra == 0 and await mock_opened(user_id, kind, exam):
@@ -150,6 +180,8 @@ async def acquire_check(user_id: int, kind: str) -> tuple[bool, str]:
 async def reserve(user_id: int, kind: str, exam: dict | None) -> tuple[bool, str, bool]:
     """Baholashdan oldin: (ruxsat, sabab, joy band qilindimi). Shu davrda ochilgan mock (yoki o'z testi) -
     limit olinmaydi (band qilinmaydi). Band qilingan bo'lsa, baholashdan keyin release_check() shart."""
+    if await mock_locked(user_id, exam):  # obuna imtihon davomida tugagan bo'lishi mumkin
+        return False, TRIAL_ONLY_MSG, False
     if is_admin(user_id) or is_own(exam, user_id) or (PREMIUM_ENABLED and await mock_opened(user_id, kind, exam)):
         if user_id in config.BLOCKED_IDS:
             return False, "Siz botdan foydalanishdan chetlatilgansiz.", False
@@ -176,7 +208,7 @@ async def usage_text(user_id: int) -> str:
         parts.append(f"{icon} {plans.KIND_LABEL[kind]}: <b>{info['used']}/{lim}</b> mock")
     text = " • ".join(parts)
     if info["plan"] == "free":
-        return f"Bu oy: {text}"
+        return await trial_status(user_id)
     if info["next_reset"]:
         return f"Shu 30 kunda: {text}\n(yangi davr {_local_date(info['next_reset'])} da)"
     return f"Shu davrda: {text}"
@@ -184,6 +216,8 @@ async def usage_text(user_id: int) -> str:
 
 async def usage_block(user_id: int) -> str:
     """Profil va tarif sahifasi uchun chiroyli blok: har bo'lim bo'yicha chiziq va qachon yangilanishi."""
+    if await free_trial_only(user_id):
+        return await trial_status(user_id) + "\n🔓 Qolgan mocklar — ⭐ Standard, 💎 Pro va 👑 VIP obunachilari uchun"
     lines, info = [], None
     for kind, icon in (("speaking", "🎙"), ("writing", "✍️")):
         info = await usage(user_id, kind)

@@ -2,14 +2,14 @@
 
 Limit Konuşma va Yazma uchun ALOHIDA, MOCK bilan hisoblanadi (mockni ochish - 1 ta; uning qismlari va
 qolgan qismlari shu davrda bepul; har qism bir marta ishlanadi):
-  🆓 Bepul    — oyiga 2 Konuşma + 2 Yazma (kalendar oy, O'zbekiston vaqti)
+  🆓 Bepul    — faqat 🎁 1 ta sinov mock (bir marta); qolgan mocklar ko'rinmaydi
   ⭐ Standard — 30 + 30, 30 000 so'm / 30 kun
   💎 Pro      — 60 + 60, 50 000 so'm / 30 kun, 2 ekspert baholashi
   👑 VIP      — 100 + 100, 70 000 so'm / 30 kun, 2 ekspert baholashi
 Pullik tarifda limit har 30 kunlik davrda yangilanadi (obuna 60 kunga berilsa - ikki davr).
 Limit va narxlarni admin «⚙️ Sozlamalar» dan o'zgartira oladi (bazada saqlanadi)."""
 import db
-from config import RATERS
+from config import PREMIUM_ENABLED, RATERS
 
 KINDS = ("speaking", "writing")
 KIND_LABEL = {"speaking": "Konuşma", "writing": "Yazma"}
@@ -57,10 +57,11 @@ def _count(n: int | None) -> str:
 
 
 def limits_text(plan: str) -> str:
-    """«30 Konuşma + 30 Yazma mock» (bepulda - «oyiga ...»)."""
+    """«30 Konuşma + 30 Yazma mock» (bepulda - faqat sinov mock, access.free_trial_only)."""
+    if plan == "free" and PREMIUM_ENABLED:
+        return "🎁 1 ta sinov mock (bir marta)"
     s, w = limit_for(plan, "speaking"), limit_for(plan, "writing")
-    text = f"{_count(s)} Konuşma + {_count(w)} Yazma mock"
-    return f"oyiga {text}" if plan == "free" else text
+    return f"{_count(s)} Konuşma + {_count(w)} Yazma mock"
 
 
 def offer_line(plan: str) -> str:

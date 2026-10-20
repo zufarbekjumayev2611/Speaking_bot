@@ -90,13 +90,23 @@ O'quvchilar endi o'zi test yaratmaydi; mockka kirmagan eski testlar «🗂 Eski 
 
 `speakbot/.env.example` dan `.env` yarating va `speakbot/run_local.sh` ni ishga tushiring (cloudflared kerak).
 
+## 🎁 Sinov mock (bepul foydalanuvchilar)
+
+Bepul foydalanuvchi mocklar ro'yxatida faqat **bitta sinov mock**ni ko'radi va uni **bir marta** ishlaydi (har qismi
+bir marta). Qolgan mocklar unga umuman ko'rinmaydi va ochilmaydi (eski tugma / mini app havolasi orqali ham) — ular
+faqat ⭐ Standard, 💎 Pro va 👑 VIP obunachilari va adminlar uchun. Sinov mockning Konuşma (yoki Yazma) bo'limi
+to'liq ishlanishi bilan bot o'quvchiga tariflar sahifasini («🚀 Tarifni yaxshilash») yuboradi.
+
+Qaysi mock sinov: Admin → 📚 Mocklar → mockni oching → «🎁 Sinov mock qilish». Tanlanmagan bo'lsa — savoli bor eng
+kichik raqamli mock. Ro'yxatda sinov mock 🎁 bilan belgilanadi. `PREMIUM_ENABLED=0` bo'lsa cheklov yo'q.
+
 ## Tariflar va admin panel
 
 **Tariflar** — Konuşma va Yazma limiti **alohida** hisoblanadi:
 
 | Tarif | Konuşma | Yazma | Narx | Qo'shimcha |
 |---|---|---|---|---|
-| 🆓 Bepul | oyiga 2 | oyiga 2 | — | — |
+| 🆓 Bepul | 🎁 1 ta sinov mock (bir marta) | — | — | qolgan mocklar ko'rinmaydi |
 | ⭐ Standard | 30 | 30 | 30 000 so'm / 30 kun | — |
 | 💎 Pro | 60 | 60 | 50 000 so'm / 30 kun | 2 ekspert baholashi |
 | 👑 VIP | 100 | 100 | 70 000 so'm / 30 kun | 2 ekspert baholashi |

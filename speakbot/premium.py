@@ -16,6 +16,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+import access
 import config
 import payments
 import db
@@ -112,16 +113,32 @@ class BlockMiddleware(BaseMiddleware):
 @router.message(Command("premium", "tarif"))
 async def premium_info(message: Message, state: FSMContext):
     await state.clear()
-    uid = message.from_user.id
-    if not PREMIUM_ENABLED:
-        return await message.answer("Hozircha barcha imkoniyatlar hamma uchun cheksiz. 🎉")
-    if is_admin(uid):
-        return await message.answer("👮 Siz adminsiz — sizda cheklov yo'q.")
+    await _send_tariffs(message, message.from_user.id)
 
+
+@router.callback_query(F.data == "tariffs")
+async def premium_info_cb(callback: CallbackQuery, state: FSMContext):
+    """Inline «🚀 Tarifni yaxshilash» tugmasi (sinov mockdan keyin, mocklar ro'yxatida)."""
+    await state.clear()
+    await callback.answer()
+    await _send_tariffs(callback.message, callback.from_user.id)
+
+
+async def _send_tariffs(target: Message, uid: int):
+    if not PREMIUM_ENABLED:
+        return await target.answer("Hozircha barcha imkoniyatlar hamma uchun cheksiz. 🎉")
+    if is_admin(uid):
+        return await target.answer("👮 Siz adminsiz — sizda cheklov yo'q.")
+    text, kb = await tariffs_view(uid)
+    await target.answer(text, parse_mode="HTML", reply_markup=kb)
+
+
+async def tariffs_view(uid: int, head: str = "") -> tuple[str, InlineKeyboardMarkup]:
+    """Tariflar sahifasi: narxlar, limitlar, joriy tarif va to'lov ma'lumoti."""
     prem = await db.get_premium(uid)
     plan = prem["plan"] if prem else "free"
     badges = {"pro": "  🔥 <i>eng ommabop</i>", "vip": "  💰 <i>eng foydali</i>"}
-    lines = ["🚀 <b>Tarifni yaxshilash</b>", "━━━━━━━━━━━━━━━━"]
+    lines = ([head, ""] if head else []) + ["🚀 <b>Tarifni yaxshilash</b>", "━━━━━━━━━━━━━━━━"]
     for p in plans.PLANS:
         mark = "  ✅ <i>sizda</i>" if p == plan else badges.get(p, "")
         head = f"<b>{plans.name(p)}</b>" + (f" — <b>{plans.money(plans.price_for(p))}</b> / {plans.PERIOD_DAYS} kun" if p != "free" else "")
@@ -140,7 +157,7 @@ async def premium_info(message: Message, state: FSMContext):
         "",
         f"📅 <b>Muddat:</b> pullik tarif to'lov qilingan kundan boshlab <b>{plans.PERIOD_DAYS} kun</b> amal qiladi — "
         "limit shu 30 kun uchun beriladi. Keyingi oy yana to'lov qilsangiz, yangi 30 kun va yangi limit boshlanadi. "
-        "Bepul tarif limiti esa har oyning 1-sanasida yangilanadi.",
+        "Bepul tarifda — faqat 🎁 <b>1 ta sinov mock</b> (bir marta); qolgan mocklar obunachilarga ochiladi.",
         "",
         f"📌 Sizning tarifingiz: <b>{e(plans.name(plan))}</b>" + (f" — {_local(prem['until'])} gacha" if prem else ""),
         await usage_block(uid),
@@ -151,8 +168,36 @@ async def premium_info(message: Message, state: FSMContext):
     if info and info != DEFAULT_INFO:  # admin yozgan qo'shimcha to'lov ma'lumoti
         lines += ["", f"ℹ️ {e(info)}"]
     lines += ["", f"👤 <b>Admin: {e(db.admin_contact())}</b> — savollar bo'lsa shu yerga yozing."]
-    kb = InlineKeyboardMarkup(inline_keyboard=payments.pay_buttons())
-    await message.answer("\n".join(lines), parse_mode="HTML", reply_markup=kb)
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=payments.pay_buttons())
+
+
+async def trial_upsell(bot, user_id: int, exam: dict | None, kind: str):
+    """Bepul foydalanuvchi sinov mockning bo'limini (Konuşma yoki Yazma) tugatdi - tariflar haqida ma'lumot.
+    Natija allaqachon yuborilgan - bu yerdagi xato o'quvchiga ta'sir qilmasin."""
+    try:
+        await _trial_upsell(bot, user_id, exam, kind)
+    except Exception:
+        log.warning("Tariflar haqidagi xabarni yuborib bo'lmadi (%s)", user_id, exc_info=True)
+
+
+async def _trial_upsell(bot, user_id: int, exam: dict | None, kind: str):
+    mock_id = (exam or {}).get("mock_id")
+    if not mock_id or not await access.free_trial_only(user_id) or mock_id != await db.trial_mock_id():
+        return
+    done = (await access.done_parts(user_id, mock_id))[kind]
+    need = set()
+    for ex in await db.mock_exams(mock_id):
+        if (ex.get("kind") or "speaking") != kind or not ex.get("q_count"):
+            continue
+        # yazma mockda bitta "full" test: 1 va 2-qism birga yoki alohida ishlanadi
+        need |= {"1", "2"} if kind == "writing" and ex.get("part") == "full" else {ex.get("part")}
+    if not done or not need <= done:
+        return  # bo'limning hali ishlanmagan qismlari bor
+    head = (f"🎉 <b>Sinov mockning {plans.KIND_LABEL[kind]} bo'limini tugatdingiz!</b>\n"
+            "Natijangiz yuqorida. Qolgan barcha mocklar — ⭐ Standard, 💎 Pro va 👑 VIP obunachilari uchun. "
+            "Davom etish uchun tarifni tanlang 👇")
+    text, kb = await tariffs_view(user_id, head)
+    await bot.send_message(user_id, text, parse_mode="HTML", reply_markup=kb)
 
 
 # ======================================================================

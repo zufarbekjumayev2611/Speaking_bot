@@ -21,6 +21,7 @@ import stt
 import html
 
 import plans
+import premium
 import writing
 from access import REDO_MSG, already_done, check_access, done_parts, get_plan, release_check, reserve
 import config
@@ -253,6 +254,7 @@ async def finish_exam(request: web.Request):
         f"📥 🎙 {name} (<code>{user['id']}</code>) — {html.escape(title)}: "
         f"<b>{float(result['raw']):g}/{result['max_raw']}</b> ({html.escape(result['level'])})",
     )
+    await premium.trial_upsell(bot, user["id"], exam, "speaking")
     return web.json_response(result)
 
 
@@ -390,6 +392,7 @@ async def finish_mock(request: web.Request):
             f"📥 🎙 {name} (<code>{user['id']}</code>) — {html.escape(mock['title'])} (Full mock): "
             f"<b>{combined['total']}/75</b> ({html.escape(combined['level'])})",
         )
+        await premium.trial_upsell(bot, user["id"], rows[0][1], "speaking")
     return web.json_response(combined)
 
 
