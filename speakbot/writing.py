@@ -21,6 +21,7 @@ import re
 import db
 import grader
 import plans
+import premium
 from access import REDO_MSG, already_done, get_plan, release_check, reserve
 from parts import part_info
 
@@ -392,4 +393,5 @@ async def grade_and_store(bot, user_id: int, user_name: str, exam: dict, texts: 
         f"📥 ✍️ {e(user_name)} (<code>{user_id}</code>) — {e(exam['title'])}: "
         f"<b>{float(result['raw']):g}/{result['max_raw']}</b> ({e(result['level'])})",
     )
+    await premium.trial_upsell(bot, user_id, exam, "writing")
     return result, True

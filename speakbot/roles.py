@@ -12,7 +12,7 @@ from config import is_admin, is_owner
 # bo'lim -> (nomi, shu bo'limga tegishli tugma prefikslari)
 SECTIONS: dict[str, tuple[str, tuple[str, ...]]] = {
     "tests": ("📚 Mocklar va testlar", (
-        "adm_exams", "mka:", "mkap:", "mka_new", "mka_find", "mkad:", "mkady:", "mkar:", "exs:", "ex_find", "exam:", "exam_new", "nk:", "np:", "exam_del", "exam_ren:", "exam_toggle:",
+        "adm_exams", "mka:", "mkap:", "mkat:", "mka_new", "mka_find", "mkad:", "mkady:", "mkar:", "exs:", "ex_find", "exam:", "exam_new", "nk:", "np:", "exam_del", "exam_ren:", "exam_toggle:",
         "q_new:", "q_done:", "q_edit:", "q_delask:", "q_del:", "qe_", "qs_", "qall:", "qap:", "qaa:",
         "wtask:", "wtf:", "wph:", "wphx:", "wprev:",
     )),

@@ -695,6 +695,31 @@ async def delete_mock(mock_id: int):
     _done_cache.clear()
 
 
+TRIAL_KEY = "trial_mock"  # settings: sinov mock id'si (admin tanlaydi)
+_trial_cache: tuple | None = None
+
+
+async def trial_mock_id() -> int | None:
+    """🎁 Sinov mock - bepul foydalanuvchilar faqat shuni ko'radi. Admin tanlagani (bor bo'lsa), aks holda
+    savoli bor eng kichik raqamli mock. Mocklar yoki sozlama o'zgarmaguncha xotiradan olinadi."""
+    global _trial_cache
+    chosen = setting(TRIAL_KEY)
+    key = (CATALOG_VERSION, chosen)
+    if _trial_cache and _trial_cache[0] == key:
+        return _trial_cache[1]
+    row = await _fetchone(
+        """SELECT (SELECT id FROM mocks WHERE id = ?) AS chosen,
+                  (SELECT m.id FROM mocks m
+                    WHERE EXISTS (SELECT 1 FROM exams e JOIN questions q ON q.exam_id = e.id
+                                   WHERE e.mock_id = m.id AND e.is_active = 1)
+                    ORDER BY m.number, m.id LIMIT 1) AS first""",
+        (int(chosen) if chosen.isdigit() else -1,),
+    )
+    mock_id = (row or {}).get("chosen") or (row or {}).get("first")
+    _trial_cache = (key, mock_id)
+    return mock_id
+
+
 async def rename_mock(mock_id: int, title: str):
     await _execute("UPDATE mocks SET title = ? WHERE id = ?", (title, mock_id))
 
