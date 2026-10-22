@@ -28,6 +28,7 @@ ikkinchi xizmat kaliti bor bo'lsa (Groq ↔ Claude), avtomatik o'shanga o'tadi.
 | `PREMIUM_ENABLED` | yo'q | `0` bo'lsa premium tizimi o'chiq, hamma cheklovsiz (standart `1`) |
 | `WEBAPP_URL` | yo'q | Render `RENDER_EXTERNAL_URL` ni o'zi beradi |
 | `USERS_API_KEY` | yo'q | Berilsa (kamida 16 belgi) `GET /api/users` ishlaydi — pastga qarang |
+| `BOT_FOUNDER` | yo'q | /start xabaridagi «Loyiha asoschisi» (standart `Muhammad Xaydarov`; bo'sh — ko'rsatilmaydi) |
 
 3. **Baza saqlanishi:** SQLite fayl. Render'ning bepul rejasida fayl tizimi vaqtinchalik —
    har deploy/restartda imtihonlar va natijalar o'chadi. Doimiy saqlash uchun pullik reja + **Disk**

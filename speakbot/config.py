@@ -88,6 +88,8 @@ USERS_API_KEY = os.getenv("USERS_API_KEY", "").strip()
 ADMIN_CONTACT = "@" + (os.getenv("ADMIN_CONTACT", "muhammad_hocam").strip().lstrip("@") or "muhammad_hocam")
 if len(USERS_API_KEY) < 16:
     USERS_API_KEY = ""
+# Bot asoschisi - /start xabarida ko'rsatiladi (bo'sh qo'yilsa - qator chiqmaydi)
+BOT_FOUNDER = os.getenv("BOT_FOUNDER", "Muhammad Xaydarov").strip()
 
 # «📊 Natijalarim» bo'limi (o'quvchi o'z natijalari ro'yxatini ko'radi). Hozircha o'chiq:
 # yoqish uchun Render -> Environment'da SHOW_MY_RESULTS=1 qo'ying (kod tayyor).
