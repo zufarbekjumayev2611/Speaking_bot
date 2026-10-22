@@ -136,7 +136,7 @@ async def cmd_start(message: Message, state: FSMContext):
         "🔥 <b>Full mock</b> — hammasi ketma-ket, yoki istalgan qismni alohida ishlang\n"
         "🏅 <b>Natija</b> — ball, daraja (A2–C1) va 25 tagacha xato tahlili\n"
         "━━━━━━━━━━━━━━━━\n"
-        + (f"👨‍🏫 Loyiha asoschisi: <b>{e(config.BOT_FOUNDER)}</b>\n\n" if config.BOT_FOUNDER else "")
+        + (f"👑 Bot sahibi: <b>{e(config.BOT_FOUNDER)}</b>\n\n" if config.BOT_FOUNDER else "")
         + f"Boshlash uchun pastdan «{BTN_SPEAKING}» yoki «{BTN_WRITING}» ni tanlang 👇{admin}",
         parse_mode="HTML",
         reply_markup=main_keyboard(message.from_user.id),
