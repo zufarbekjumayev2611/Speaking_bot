@@ -23,19 +23,32 @@ async def get_plan(user_id: int) -> str:
     return p["plan"] if p else "free"
 
 
-def period_bounds(until: str | None) -> tuple[str | None, str | None]:
+def period_bounds(prem: dict | None) -> tuple[str | None, str | None]:
     """Pullik obunaning joriy 30 kunlik davri: (boshlanishi, keyingi davr boshlanishi) UTC matnda.
-    Obuna `until` da tugaydi; davrlar undan orqaga 30 kundan sanaladi. Bepulda (None, None)."""
-    if not until:
+    Davrlar obuna boshlangan vaqtdan (period_start) 30 kundan sanaladi; eski yozuvlarda - tugash sanasidan
+    orqaga. Bepulda (None, None)."""
+    if not prem or not prem.get("until"):
         return None, None
-    end = datetime.strptime(until, _FMT).replace(tzinfo=timezone.utc)
-    now = datetime.now(timezone.utc)
+    end = datetime.strptime(prem["until"], _FMT)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     step = timedelta(days=plans.PERIOD_DAYS)
-    start = end - step
-    while start > now:  # obuna bir necha davrga berilgan - hozirgi davrni topamiz
-        start -= step
+    start = datetime.strptime(prem.get("period_start") or db.legacy_period_start(prem["until"]), _FMT)
+    while start + step <= now:  # obuna bir necha davrga berilgan - hozirgi davrni topamiz
+        start += step
     nxt = start + step
     return start.strftime(_FMT), (nxt.strftime(_FMT) if nxt < end else None)
+
+
+async def limit_reached(user_id: int, kind: str | None = None) -> bool:
+    """Pullik obunachining joriy 30 kunlik limiti tugaganmi (kind berilmasa - Konuşma YOKI Yazma).
+    Tugagan bo'lsa, yangi to'lov obunani hozirdan qayta boshlaydi (db.grant_premium restart=True)."""
+    if not PREMIUM_ENABLED or is_admin(user_id) or not await db.get_premium(user_id):
+        return False
+    for k in ([kind] if kind else plans.KINDS):
+        u = await usage(user_id, k)
+        if u["limit"] is not None and u["used"] >= u["limit"]:
+            return True
+    return False
 
 
 def _in_period(stamp: str | None, start: str | None, now_month: str) -> bool:
@@ -78,7 +91,7 @@ async def usage(user_id: int, kind: str) -> dict:
     else:  # tarif va ishlar parallel olinadi (keshda bo'lmasa ham - bitta kutish)
         prem, rows = await asyncio.gather(db.get_premium(user_id), db.user_done(user_id))
     plan = "vip" if is_admin(user_id) else (prem["plan"] if prem else "free")
-    start, nxt = period_bounds(prem["until"] if prem else None)
+    start, nxt = period_bounds(prem)
     used = count_used(rows, kind, start)
     return {"plan": plan, "used": used, "limit": plans.limit_for(plan, kind), "next_reset": nxt,
             "until": prem["until"] if prem else None}
@@ -98,7 +111,7 @@ async def mock_opened(user_id: int, kind: str, exam: dict | None) -> bool:
     if not exam or not exam.get("mock_id"):
         return False
     prem = await db.get_premium(user_id)
-    start, _ = period_bounds(prem["until"] if prem else None)
+    start, _ = period_bounds(prem)
     mock_id = exam["mock_id"]
     return any(r["kind"] == kind and r.get("mock_id") == mock_id for r in _period_rows(await db.user_done(user_id), start))
 
@@ -157,8 +170,10 @@ async def check_access(user_id: int, kind: str, _extra: int = 0, exam: dict | No
         when = f"Yangi 30 kunlik davr {_local_date(u['next_reset'])} da boshlanadi."
     else:
         when = f"Obunangiz {_local_date(u['until'])} gacha."
-    upsell = (f" Ko'proq kerak bo'lsa — «🚀 Tarifni yaxshilash» yoki admin: {db.admin_contact()}."
-              if u["plan"] != "vip" else "")
+    if u["plan"] == "free":
+        upsell = f" Ko'proq kerak bo'lsa — «🚀 Tarifni yaxshilash» yoki admin: {db.admin_contact()}."
+    else:  # pullik: kutmasdan qayta sotib olsa - yangi 30 kun va to'liq limit hoziroq
+        upsell = " Kutmasdan: «🔄 Yangi 30 kun» — limit hoziroq yangilanadi."
     return False, f"{label} limiti tugadi ({used}/{u['limit']} mock). {when}{upsell}"
 
 

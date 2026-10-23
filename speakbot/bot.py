@@ -35,7 +35,8 @@ import report
 import roles
 import writing
 from access import (REDO_MSG, TRIAL_ONLY_MSG, already_done, check_access, done_counts, done_parts, free_trial_only,
-                    mock_locked, mocks_done, usage_block, usage_text)
+                    limit_reached, mock_locked, mocks_done, usage_block, usage_text)
+import payments
 from config import EXAM_LANGUAGE, WEBAPP_URL, is_admin, is_owner
 from languages import LANGUAGES
 from parts import WRITING_PARTS, part_info, parts_for, speaking_times
@@ -395,6 +396,7 @@ async def _mocks_view(user_id: int, page: int = 0, kind: str | None = None):
         ]
     B = InlineKeyboardButton
     upgrade = [B(text=BTN_PREMIUM, callback_data="tariffs")]
+    renew = not trial_only and await limit_reached(user_id, kind)
     if trial_only:
         lines.append(f"\n{await usage_text(user_id)}\n<i>Bepul tarifda sizga 🎁 <b>1 ta sinov mock</b> ochiq — uni "
                      "<b>bir marta</b> ishlaysiz. Qolgan barcha mocklar ⭐ Standard, 💎 Pro va 👑 VIP obunachilari "
@@ -402,9 +404,13 @@ async def _mocks_view(user_id: int, page: int = 0, kind: str | None = None):
     elif config.PREMIUM_ENABLED and not is_admin(user_id):
         lines.append(f"\n💼 {await usage_text(user_id)}\n<i>Mockni ochsangiz, limitdan 1 ta olinadi. Har bir qism "
                      "<b>bir marta</b> ishlanadi — ishlangan mockni qayta ishlab bo'lmaydi.</i>")
+    if renew:  # obunachi limitni muddatidan oldin tugatdi - kutmasdan qayta boshlashi mumkin
+        lines.append("\n🔄 <b>Limitingiz tugadi.</b> Kutish shart emas — «🔄 Yangi 30 kun boshlash» tugmasi bilan "
+                     "tarifni qayta oling: obuna hozirdan yangi 30 kunga boshlanadi va limit to'liq yangilanadi.")
+        upgrade = [payments.renew_button()]
     if not mocks:
         lines.append("\nHozircha tayyor mock yo'q — tez orada qo'shiladi.")
-        return "\n".join(lines), (InlineKeyboardMarkup(inline_keyboard=[upgrade]) if trial_only else None)
+        return "\n".join(lines), (InlineKeyboardMarkup(inline_keyboard=[upgrade]) if trial_only or renew else None)
     if trial_only:
         lines.append("\nTanlang 👇")
     else:
@@ -415,7 +421,7 @@ async def _mocks_view(user_id: int, page: int = 0, kind: str | None = None):
     buttons = [B(text=f"{'✅ ' if m['id'] in done else ''}{gift}{m['title']}{badges(m)}"[:40],
                  callback_data=f"{open_cb}:{m['id']}") for m in chunk]
     rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
-    if trial_only:
+    if trial_only or renew:
         rows.append(upgrade)
     suffix = f":{_KIND_KEY[kind]}" if kind else ""
     if pages > 1:

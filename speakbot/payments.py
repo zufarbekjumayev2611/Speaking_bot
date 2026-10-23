@@ -14,6 +14,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+import access
 import config
 import db
 import plans
@@ -65,6 +66,15 @@ def pay_buttons() -> list[list[InlineKeyboardButton]]:
             [InlineKeyboardButton(text=f"✍️ Adminga yozish ({db.admin_contact()})", url=db.admin_link())]]
 
 
+RESTART_NOTE = ("🔄 <b>Limitingiz tugagan</b> — to'lov tasdiqlangach obuna <b>hozirdan yangidan</b> boshlanadi: "
+                "yangi 30 kun va to'liq limit (eski obunaning qolgan kunlari hisobga olinmaydi).")
+
+
+def renew_button() -> InlineKeyboardButton:
+    """Limiti tugagan obunachi uchun: qayta to'lov - yangi 30 kun va to'liq limit hoziroq."""
+    return InlineKeyboardButton(text="🔄 Yangi 30 kun boshlash", callback_data="pay")
+
+
 def _plan_line(plan: str) -> str:
     return f"{plans.name(plan)} — {plans.money(plans.price_for(plan))}"
 
@@ -85,8 +95,10 @@ async def pay_start(event, state: FSMContext):
     rows = [[InlineKeyboardButton(text=_plan_line(p), callback_data=f"pay_p:{p}")] for p in plans.PAID]
     rows.append([InlineKeyboardButton(text="❌ Bekor qilish", callback_data="pay_x")])
     card = card_text()
+    restart = await access.limit_reached(uid)
     await message.answer(
         "✅ <b>To'lovni tasdiqlash</b>\n━━━━━━━━━━━━━━━━\n"
+        + (f"{RESTART_NOTE}\n\n" if restart else "")
         + (f"💳 Karta: <code>{e(card)}</code>\n\n" if card else "")
         + "Qaysi tarif uchun to'lov qildingiz? 👇",
         parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
@@ -136,7 +148,8 @@ async def pay_receipt(message: Message, state: FSMContext):
     handle = f" @{e(u.username)}" if u.username else ""
     caption = (f"💳 <b>Yangi to'lov cheki #{pid}</b>\n"
                f"👤 {e(u.full_name)}{handle} (<code>{u.id}</code>)\n"
-               f"📦 Tanlagan tarifi: <b>{e(_plan_line(plan))}</b>\n\n"
+               f"📦 Tanlagan tarifi: <b>{e(_plan_line(plan))}</b>\n"
+               + await _restart_line(u.id) + "\n"
                f"Pul tushganini tekshiring va summaga mos tarifni bosing — obuna {PAY_DAYS} kunga beriladi.")
     sent = 0
     for admin_id in config.all_admin_ids():
@@ -174,11 +187,21 @@ async def pay_card_again(callback: CallbackQuery):
     u = await db.get_user(pay["telegram_id"]) or {}
     handle = f" @{e(u['username'])}" if u.get("username") else ""
     caption = (f"💳 <b>To'lov cheki #{pay['id']}</b>\n👤 {e(u.get('full_name') or pay['telegram_id'])}{handle} "
-               f"(<code>{pay['telegram_id']}</code>)\n📦 Tanlagan tarifi: <b>{e(_plan_line(pay['plan']))}</b>\n\n"
+               f"(<code>{pay['telegram_id']}</code>)\n📦 Tanlagan tarifi: <b>{e(_plan_line(pay['plan']))}</b>\n"
+               + await _restart_line(pay["telegram_id"]) + "\n"
                f"Pul tushganini tekshiring va summaga mos tarifni bosing — obuna {PAY_DAYS} kunga beriladi.")
     send = callback.message.answer_photo if pay["file_type"] == "photo" else callback.message.answer_document
     await send(pay["file_id"], caption=caption, parse_mode="HTML", reply_markup=_admin_kb(pay["id"], pay["plan"]))
     await callback.answer()
+
+
+async def _restart_line(user_id: int) -> str:
+    """Admin uchun: tasdiqlansa obuna uzaytiriladimi yoki hozirdan qayta boshlanadimi."""
+    if await access.limit_reached(user_id):
+        return "🔄 Limiti tugagan — tasdiqlansa obuna <b>hozirdan yangi 30 kunga</b> boshlanadi (to'liq limit).\n"
+    if await db.get_premium(user_id):
+        return "➕ Faol obunasi bor — 30 kun tugash sanasiga qo'shiladi.\n"
+    return ""
 
 
 async def _close_card(callback: CallbackQuery, line: str):
@@ -221,16 +244,21 @@ async def pay_approve(callback: CallbackQuery):
         return
     _deciding.add(pid)
     try:
-        await db.decide_payment(pid, "approved", callback.from_user.id, plan)
+        restart = await access.limit_reached(pay["telegram_id"])  # limit tugagan - yangi 30 kun hozirdan
+        if not await db.decide_payment(pid, "approved", callback.from_user.id, plan):
+            await _close_card(callback, "ℹ️ Bu chekni boshqa admin allaqachon ko'rib chiqdi.")
+            return await callback.answer("Bu chek allaqachon ko'rib chiqilgan.", show_alert=True)
         until = await db.grant_premium(pay["telegram_id"], PAY_DAYS, str(plans.price_for(plan)),
-                                       callback.from_user.id, plan)
+                                       callback.from_user.id, plan, restart=restart)
     finally:
         _deciding.discard(pid)
     from premium import _local  # premium.py bu modulni import qiladi - aylana importdan qochish
     try:
         await callback.bot.send_message(
             pay["telegram_id"],
-            f"🎉 <b>To'lovingiz tasdiqlandi!</b>\n{e(plans.name(plan))} faollashtirildi — "
+            f"🎉 <b>To'lovingiz tasdiqlandi!</b>\n"
+            + ("🔄 Obunangiz yangidan boshlandi — limit to'liq yangilandi.\n" if restart else "")
+            + f"{e(plans.name(plan))} faollashtirildi — "
             f"<b>{_local(until)}</b> gacha.\nHar 30 kunda: {plans.limits_text(plan)}"
             + (" • 2 ekspert baholashi" if plans.raters_for(plan) > 1 else "") + ".\n\n«🎙 Konuşma» va «✍️ Yazma» — omad! 🚀",
             parse_mode="HTML")
@@ -248,7 +276,9 @@ async def pay_reject(callback: CallbackQuery):
     pay = await _decided(callback, pid)
     if not pay:
         return
-    await db.decide_payment(pid, "rejected", callback.from_user.id)
+    if not await db.decide_payment(pid, "rejected", callback.from_user.id):
+        await _close_card(callback, "ℹ️ Bu chekni boshqa admin allaqachon ko'rib chiqdi.")
+        return await callback.answer("Bu chek allaqachon ko'rib chiqilgan.", show_alert=True)
     try:
         await callback.bot.send_message(
             pay["telegram_id"],

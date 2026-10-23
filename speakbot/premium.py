@@ -159,16 +159,25 @@ async def tariffs_view(uid: int, head: str = "") -> tuple[str, InlineKeyboardMar
         "limit shu 30 kun uchun beriladi. Keyingi oy yana to'lov qilsangiz, yangi 30 kun va yangi limit boshlanadi. "
         "Bepul tarifda — faqat 🎁 <b>1 ta sinov mock</b> (bir marta); qolgan mocklar obunachilarga ochiladi.",
         "",
+        "🔄 <b>Limit muddatidan oldin tugadimi?</b> Kutish shart emas — istalgan tarifni qayta sotib oling: obuna "
+        "<b>hozirdan</b> yangi 30 kunga boshlanadi va limit to'liq yangilanadi.",
+        "",
         f"📌 Sizning tarifingiz: <b>{e(plans.name(plan))}</b>" + (f" — {_local(prem['until'])} gacha" if prem else ""),
         await usage_block(uid),
         "",
-        payments.card_block(),
     ]
+    renew = await access.limit_reached(uid)
+    if renew:
+        lines += [payments.RESTART_NOTE, ""]
+    lines.append(payments.card_block())
     info = await db.get_setting(INFO_KEY, DEFAULT_INFO)
     if info and info != DEFAULT_INFO:  # admin yozgan qo'shimcha to'lov ma'lumoti
         lines += ["", f"ℹ️ {e(info)}"]
     lines += ["", f"👤 <b>Admin: {e(db.admin_contact())}</b> — savollar bo'lsa shu yerga yozing."]
-    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=payments.pay_buttons())
+    rows = payments.pay_buttons()
+    if renew:  # limiti tugagan obunachi - asosiy tugma «🔄 Yangi 30 kun boshlash»
+        rows = [[payments.renew_button()]] + rows[1:]
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def trial_upsell(bot, user_id: int, exam: dict | None, kind: str):
@@ -414,17 +423,22 @@ async def grant_note(message: Message, state: FSMContext):
     if not data.get("target") or not data.get("days"):
         return await message.answer("Jarayon uzilib qolgan. «💎 Premium» bo'limidan qaytadan boshlang.")
     target, days, plan = data["target"], data["days"], data.get("plan", "pro")
-    until = await db.grant_premium(target, days, "" if note == "-" else note[:200], message.from_user.id, plan)
+    restart = await access.limit_reached(target)  # limiti tugagan obunachi - yangi davr hozirdan
+    until = await db.grant_premium(target, days, "" if note == "-" else note[:200], message.from_user.id, plan,
+                                   restart=restart)
     delivered = await _notify(
         message.bot, target,
-        f"{e(plans.name(plan))} <b>faollashtirildi!</b>\nTugash sanasi: <b>{_local(until)}</b>\n"
+        ("🔄 Obunangiz yangidan boshlandi — limit to'liq yangilandi.\n" if restart else "")
+        + f"{e(plans.name(plan))} <b>faollashtirildi!</b>\nTugash sanasi: <b>{_local(until)}</b>\n"
         f"Har 30 kunda: {plans.limits_text(plan)}"
         + (" • 2 ekspert baholashi" if plans.raters_for(plan) > 1 else "") + ".\n\nOmad! 🎉",
     )
     text, kb = await _premium_view()
     warn = "" if delivered else "\n⚠️ Foydalanuvchiga xabar yetkazilmadi (u botga /start bosmagan yoki botni to'xtatgan)."
     await message.answer(
-        f"✅ {data['label']} — {e(plans.name(plan))} <b>{_local(until)}</b> gacha ({days} kun qo'shildi).{warn}",
+        f"✅ {data['label']} — {e(plans.name(plan))} <b>{_local(until)}</b> gacha "
+        + (f"(limiti tugagan edi — obuna hozirdan {days} kunga qayta boshlandi).{warn}" if restart
+           else f"({days} kun qo'shildi).{warn}"),
         parse_mode="HTML",
     )
     await message.answer(text, parse_mode="HTML", reply_markup=kb)

@@ -143,6 +143,8 @@ _MIGRATIONS = [
     "ALTER TABLE exams ADD COLUMN expires_at TEXT",
     "ALTER TABLE admins ADD COLUMN perms TEXT",  # adminning ochiq bo'limlari (NULL - hammasi), roles.py
     "ALTER TABLE exams ADD COLUMN mock_id INTEGER",  # qaysi mockning qismi (NULL - eski, alohida test)
+    # obunaning 30 kunlik limit davrlari shu vaqtdan sanaladi (NULL - eski yozuv: tugash sanasidan orqaga)
+    "ALTER TABLE premium ADD COLUMN period_start TEXT",
 ]
 
 
@@ -1118,15 +1120,16 @@ PREMIUM_TTL = 600
 
 
 async def get_premium(telegram_id: int) -> dict | None:
-    """Faol premium: {"until": ..., "plan": "standard" | "pro" | "vip"} yoki None (tugagan / yo'q)."""
+    """Faol premium: {"until", "plan": "standard" | "pro" | "vip", "period_start"} yoki None (tugagan / yo'q).
+    period_start - limit davrlari shu vaqtdan 30 kundan sanaladi (eski yozuvlarda None)."""
     cached = _premium_cache.get(telegram_id)
     if cached and time.time() - cached[0] < PREMIUM_TTL:
         row = cached[1]
     else:
-        row = await _fetchone("SELECT until, plan FROM premium WHERE telegram_id = ?", (telegram_id,))
+        row = await _fetchone("SELECT until, plan, period_start FROM premium WHERE telegram_id = ?", (telegram_id,))
         _premium_cache[telegram_id] = (time.time(), row)
     if row and row["until"] > _now().strftime(_FMT):
-        return {"until": row["until"], "plan": row["plan"] or "pro"}
+        return {"until": row["until"], "plan": row["plan"] or "pro", "period_start": row.get("period_start")}
     return None
 
 
@@ -1135,24 +1138,41 @@ async def get_premium_until(telegram_id: int) -> str | None:
     return p["until"] if p else None
 
 
-async def grant_premium(telegram_id: int, days: int, amount: str, granted_by: int, plan: str = "pro") -> str:
-    """Premiumni `days` kunga uzaytiradi (faol bo'lsa - tugash sanasiga qo'shiladi), tarifni `plan` ga o'rnatadi.
-    Yangi tugash vaqtini qaytaradi."""
+PERIOD = timedelta(days=30)  # plans.PERIOD_DAYS (plans db'ni import qiladi - aylana importdan qochish)
+
+
+def legacy_period_start(until: str) -> str:
+    """period_start yozilmagan (eski) obuna: joriy davr boshi tugash sanasidan orqaga 30 kundan sanaladi."""
+    start, now = datetime.strptime(until, _FMT) - PERIOD, _now()
+    while start > now:
+        start -= PERIOD
+    return start.strftime(_FMT)
+
+
+async def grant_premium(telegram_id: int, days: int, amount: str, granted_by: int, plan: str = "pro",
+                        restart: bool = False) -> str:
+    """Obuna beradi, tarifni `plan` ga o'rnatadi; yangi tugash vaqtini qaytaradi.
+    restart=False: faol obuna `days` kunga uzaytiriladi (tugash sanasiga qo'shiladi), limit davrlari o'zgarmaydi.
+    restart=True (limit tugagan): obuna HOZIRDAN yangidan boshlanadi - yangi 30 kunlik davr va to'liq limit;
+    eski obunaning qolgan kunlari kuyadi."""
     _premium_cache.pop(telegram_id, None)
-    current = await get_premium_until(telegram_id)
-    base = datetime.strptime(current, _FMT) if current else _now()
+    current = await get_premium(telegram_id)
+    now = _now()
+    if current and not restart:
+        base = datetime.strptime(current["until"], _FMT)
+        start = current.get("period_start") or legacy_period_start(current["until"])
+    else:
+        base, start = now, now.strftime(_FMT)
     until = (base + timedelta(days=days)).strftime(_FMT)
-    await _execute(
-        """INSERT INTO premium (telegram_id, until, plan, reminded_for) VALUES (?, ?, ?, NULL)
-           ON CONFLICT(telegram_id) DO UPDATE SET until = excluded.until, plan = excluded.plan,
-               reminded_for = NULL, updated_at = datetime('now')""",
-        (telegram_id, until, plan),
-    )
-    await _execute(
-        "INSERT INTO premium_log (telegram_id, action, plan, days, amount, granted_by) VALUES (?, 'grant', ?, ?, ?, ?)",
-        (telegram_id, plan, days, amount, granted_by),
-    )
-    _premium_cache[telegram_id] = (time.time(), {"until": until, "plan": plan})
+    await _execute_many([
+        ("""INSERT INTO premium (telegram_id, until, plan, reminded_for, period_start) VALUES (?, ?, ?, NULL, ?)
+            ON CONFLICT(telegram_id) DO UPDATE SET until = excluded.until, plan = excluded.plan,
+                reminded_for = NULL, period_start = excluded.period_start, updated_at = datetime('now')""",
+         (telegram_id, until, plan, start)),
+        ("INSERT INTO premium_log (telegram_id, action, plan, days, amount, granted_by) VALUES (?, 'grant', ?, ?, ?, ?)",
+         (telegram_id, plan, days, amount, granted_by)),
+    ])
+    _premium_cache[telegram_id] = (time.time(), {"until": until, "plan": plan, "period_start": start})
     return until
 
 
@@ -1248,9 +1268,17 @@ async def pending_payment(telegram_id: int):
                            "AND created_at > datetime('now', '-3 days') ORDER BY id DESC LIMIT 1", (telegram_id,))
 
 
-async def decide_payment(payment_id: int, status: str, admin_id: int, plan: str | None = None):
-    await _execute("UPDATE payments SET status = ?, decided_by = ?, decided_plan = ?, decided_at = datetime('now') "
-                   "WHERE id = ? AND status = 'pending'", (status, admin_id, plan, payment_id))
+async def decide_payment(payment_id: int, status: str, admin_id: int, plan: str | None = None) -> bool:
+    """Chekni hal qiladi; False - uni boshqa admin allaqachon hal qilgan (bitta chek ikki marta tasdiqlanmasin)."""
+    sql = ("UPDATE payments SET status = ?, decided_by = ?, decided_plan = ?, decided_at = datetime('now') "
+           "WHERE id = ? AND status = 'pending'")
+    params = (status, admin_id, plan, payment_id)
+    if _turso:
+        return (await _turso.execute(sql, params)).rowcount > 0
+    conn = await _get()
+    cur = await conn.execute(sql, params)
+    await conn.commit()
+    return cur.rowcount > 0
 
 
 async def premium_history(telegram_id: int, limit: int = 5):
