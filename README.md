@@ -118,6 +118,12 @@ ishlangan bo'limda Full mock chiqmaydi (adminlarga cheklov yo'q). Bepul limit ka
 davrida (60 kunga berilsa — ikki davr). Limit va narxlar admin paneldagi **⚙️ Sozlamalar** orqali o'zgartiriladi.
 `PREMIUM_ENABLED=0` bo'lsa hamma cheksiz.
 
+**🔄 Limit muddatidan oldin tugasa:** obunachi 30 kunni kutmasdan tarifni qayta sotib oladi (mocklar ro'yxatida va
+tarif sahifasida «🔄 Yangi 30 kun boshlash» tugmasi chiqadi). Chek tasdiqlanganda limiti (Konuşma yoki Yazma) tugagan
+bo'lsa, obuna **hozirdan** yangi 30 kunga boshlanadi va limit to'liq yangilanadi (eski obunaning qolgan kunlari
+hisobga olinmaydi). Limit tugamagan bo'lsa — avvalgidek 30 kun tugash sanasiga qo'shiladi. Adminga chek kartasida
+qaysi biri bo'lishi yoziladi; admin qo'lda bergan obuna ham shu qoidaga bo'ysunadi.
+
 **To'lovni tasdiqlash (chek):** o'quvchi «🚀 Tarifni yaxshilash» da karta raqamini ko'radi, pul o'tkazadi,
 «✅ To'lovni tasdiqlash» (yoki `/tolov`) → tarifni tanlaydi → chek rasmini yuboradi. Chek «💎 Premium» huquqi bor
 adminlarga keladi; admin summaga mos tarif tugmasini (Standard / Pro / VIP) bosadi — obuna 30 kunga avtomatik
