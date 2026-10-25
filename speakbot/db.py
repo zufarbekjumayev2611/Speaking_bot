@@ -722,6 +722,26 @@ async def trial_mock_id() -> int | None:
     return mock_id
 
 
+async def find_mock_by_number(number: int):
+    return await _fetchone("SELECT * FROM mocks WHERE number = ? ORDER BY id LIMIT 1", (number,))
+
+
+async def swap_mocks(a: dict, b: dict):
+    """Ikki mockning joyini (tartib raqamini) almashtiradi - ro'yxatda o'rinlari o'zgaradi, ichidagi savollar o'z
+    mockida qoladi. Standart nom («Mock 3») yangi raqamga moslanadi; admin qo'ygan nom o'zgarmaydi."""
+    statements = []
+    for m, new in ((a, b["number"]), (b, a["number"])):
+        old = m["number"]
+        title = f"Mock {new}" if m["title"] == f"Mock {old}" else m["title"]
+        statements += [
+            ("UPDATE mocks SET number = ?, title = ? WHERE id = ?", (new, title, m["id"])),
+            # qismlar nomi: «Mock 3 • Part 1.1» -> «Mock 7 • Part 1.1»
+            ("UPDATE exams SET title = ? || substr(title, ?) WHERE mock_id = ? AND title LIKE ?",
+             (f"Mock {new} •", len(f"Mock {old} •") + 1, m["id"], f"Mock {old} •%")),
+        ]
+    await _execute_many(statements)
+
+
 async def rename_mock(mock_id: int, title: str):
     await _execute("UPDATE mocks SET title = ? WHERE id = ?", (title, mock_id))
 
