@@ -10,6 +10,7 @@ Admin:     ➕ Konuşma testi / ➕ Yazma mavzusi -> tur -> nom -> savollar / to
 import asyncio
 import html
 import json
+import re
 import logging
 import time
 
@@ -938,6 +939,8 @@ async def _admin_mocks_view(page: int = 0, query: str | None = None):
             nav.append(B(text="▶️", callback_data=f"mkap:{page + 1}"))
         rows.append(nav)
     rows.append([B(text="➕ Yangi mock", callback_data="mka_new"), B(text="🔎 Qidirish", callback_data="mka_find")])
+    if total > 1:
+        rows.append([B(text="🔀 Mocklarni almashtirish", callback_data="mksw")])
     if query:
         rows.append([B(text="⬅️ Mocklar", callback_data="adm_exams")])
     else:
@@ -1074,6 +1077,43 @@ async def admin_mock_delete(callback: CallbackQuery):
     text, kb = await _admin_mocks_view()
     await callback.message.edit_text("🗑 Mock o'chirildi.\n\n" + text, parse_mode="HTML", reply_markup=kb)
     await callback.answer("O'chirildi")
+
+
+class SwapMock(StatesGroup):
+    numbers = State()
+
+
+@router.callback_query(F.data == "mksw")
+async def admin_mock_swap_ask(callback: CallbackQuery, state: FSMContext):
+    if not _admin_only(callback.from_user.id):
+        return await callback.answer()
+    await state.clear()
+    await state.set_state(SwapMock.numbers)
+    await callback.message.answer(
+        "🔀 <b>Mocklarni almashtirish</b>\n\nJoyini almashtiradigan ikki mockning <b>raqamini</b> yozing, masalan: "
+        "<code>2 5</code> — Mock 2 va Mock 5 o'rin almashadi (savollari o'z mockida qoladi).\nBekor qilish: /cancel",
+        parse_mode="HTML")
+    await callback.answer()
+
+
+@router.message(SwapMock.numbers)
+async def admin_mock_swap(message: Message, state: FSMContext):
+    if not _admin_only(message.from_user.id):
+        return
+    nums = [int(x) for x in re.findall(r"\d+", message.text or "")[:3]]
+    if len(nums) != 2 or nums[0] == nums[1]:
+        return await message.answer("Ikki xil raqam yozing, masalan: <code>2 5</code>. Bekor qilish: /cancel",
+                                    parse_mode="HTML")
+    a, b = await asyncio.gather(*(db.find_mock_by_number(n) for n in nums))
+    missing = [str(n) for n, m in zip(nums, (a, b)) if not m]
+    if missing:
+        return await message.answer(f"Mock {', '.join(missing)} topilmadi. Raqamlarni tekshirib, qayta yozing. "
+                                    "Bekor qilish: /cancel")
+    await state.clear()
+    await db.swap_mocks(a, b)
+    text, kb = await _admin_mocks_view()
+    await message.answer(f"✅ Almashtirildi: <b>{e(a['title'])}</b> ↔ <b>{e(b['title'])}</b>.\n\n" + text,
+                         parse_mode="HTML", reply_markup=kb)
 
 
 class RenameMock(StatesGroup):

@@ -82,6 +82,10 @@ O'quvchi menyusida **«🎙 Konuşma»** va **«✍️ Yazma»** tugmalari: bo'l
   standart ball /75), yoki istalgan qismni alohida (Part 1.1, 1.2, 2, 3).
 - **Yazma:** 🔥 *Full mock* (1 va 2-qism, 60 daqiqa, /75), yoki faqat 1-qism (2 xat) / 2-qism (blog).
 
+**🔀 Mocklarni almashtirish:** «📚 Mocklar» ro'yxati ostidagi tugma → ikki mock raqamini yozing (masalan `2 5`) —
+ular ro'yxatda (adminda ham, o'quvchida ham) o'rin almashadi. Savollar va natijalar o'z mockida qoladi; standart nom
+(«Mock 2») yangi raqamga moslanadi, admin qo'ygan nom o'zgarmaydi.
+
 Admin: «📚 Mocklar» → «➕ Yangi mock» (raqami avtomatik, ichida 5 ta bo'sh qism) → qismni bosib savol /
 topshiriq qo'shadi. Tayyor qismlar darhol ko'rinadi; Full mock 4 ta Konuşma qismi tayyor bo'lganda chiqadi.
 Birinchi ishga tushishda 5 ta namunaviy full mock yaratiladi (Part 1.2 va 2 rasmsiz — rasmni admin qo'shadi).
