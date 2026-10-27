@@ -139,7 +139,7 @@ async def tariffs_view(uid: int, head: str = "") -> tuple[str, InlineKeyboardMar
     plan = prem["plan"] if prem else "free"
     badges = {"pro": "  🔥 <i>eng ommabop</i>", "vip": "  💰 <i>eng foydali</i>"}
     lines = ([head, ""] if head else []) + ["🚀 <b>Tarifni yaxshilash</b>", "━━━━━━━━━━━━━━━━"]
-    for p in plans.PLANS:
+    for p in ["free", *plans.on_sale(plan)]:
         mark = "  ✅ <i>sizda</i>" if p == plan else badges.get(p, "")
         head = f"<b>{plans.name(p)}</b>" + (f" — <b>{plans.money(plans.price_for(p))}</b> / {plans.PERIOD_DAYS} kun" if p != "free" else "")
         extra = [plans.limits_text(p)]
@@ -203,7 +203,7 @@ async def _trial_upsell(bot, user_id: int, exam: dict | None, kind: str):
     if not done or not need <= done:
         return  # bo'limning hali ishlanmagan qismlari bor
     head = (f"🎉 <b>Sinov mockning {plans.KIND_LABEL[kind]} bo'limini tugatdingiz!</b>\n"
-            "Natijangiz yuqorida. Qolgan barcha mocklar — ⭐ Standard, 💎 Pro va 👑 VIP obunachilari uchun. "
+            "Natijangiz yuqorida. Qolgan barcha mocklar — ⭐ Standard va 💎 Pro obunachilari uchun. "
             "Davom etish uchun tarifni tanlang 👇")
     text, kb = await tariffs_view(user_id, head)
     await bot.send_message(user_id, text, parse_mode="HTML", reply_markup=kb)
@@ -320,9 +320,9 @@ async def _ask_plan(target: Message, state: FSMContext, user: dict):
     current = await db.get_premium(user["telegram_id"])
     now = f"\nHozir: <b>{e(plans.name(current['plan']))}</b>, {_local(current['until'])} gacha" if current else ""
     await target.answer(
-        f"👤 {_who(user)}{now}\n\nQaysi tarif?\n" + "\n".join(plans.offer_line(p) for p in plans.PAID),
+        f"👤 {_who(user)}{now}\n\nQaysi tarif?\n" + "\n".join(plans.offer_line(p) for p in plans.ON_SALE),
         parse_mode="HTML",
-        reply_markup=_kb([[_btn(plans.name(p), f"pgp:{user['telegram_id']}:{p}") for p in plans.PAID]]),
+        reply_markup=_kb([[_btn(plans.name(p), f"pgp:{user['telegram_id']}:{p}") for p in plans.ON_SALE]]),
     )
 
 

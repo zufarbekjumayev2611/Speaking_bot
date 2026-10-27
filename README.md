@@ -82,9 +82,11 @@ O'quvchi menyusida **«🎙 Konuşma»** va **«✍️ Yazma»** tugmalari: bo'l
   standart ball /75), yoki istalgan qismni alohida (Part 1.1, 1.2, 2, 3).
 - **Yazma:** 🔥 *Full mock* (1 va 2-qism, 60 daqiqa, /75), yoki faqat 1-qism (2 xat) / 2-qism (blog).
 
-**🔀 Mocklarni almashtirish:** «📚 Mocklar» ro'yxati ostidagi tugma → ikki mock raqamini yozing (masalan `2 5`) —
-ular ro'yxatda (adminda ham, o'quvchida ham) o'rin almashadi. Savollar va natijalar o'z mockida qoladi; standart nom
-(«Mock 2») yangi raqamga moslanadi, admin qo'ygan nom o'zgarmaydi.
+**🔀 Mocklarni almashtirish:** «📚 Mocklar» ro'yxati ostidagi tugma → «qaysi mockgacha?» (1–30, 1–60, hammasi yoki
+raqam yozing) → tasdiqlash. Ro'yxatdagi birinchi N ta mock o'zaro tasodifiy aralashtiriladi (adminda ham, o'quvchida
+ham). Savollar va natijalar o'z mockida qoladi; standart nom («Mock 2») yangi o'ringa moslanadi, admin qo'ygan nom
+o'zgarmaydi. Sinov mock almashib ketmasligi uchun aralashtirishdan oldin qotiriladi. Obunachilar ko'radigan
+«birinchi 30 / 60 ta» mock ham yangi tartib bo'yicha bo'ladi.
 
 Admin: «📚 Mocklar» → «➕ Yangi mock» (raqami avtomatik, ichida 5 ta bo'sh qism) → qismni bosib savol /
 topshiriq qo'shadi. Tayyor qismlar darhol ko'rinadi; Full mock 4 ta Konuşma qismi tayyor bo'lganda chiqadi.
@@ -109,12 +111,16 @@ kichik raqamli mock. Ro'yxatda sinov mock 🎁 bilan belgilanadi. `PREMIUM_ENABL
 
 **Tariflar** — Konuşma va Yazma limiti **alohida** hisoblanadi:
 
-| Tarif | Konuşma | Yazma | Narx | Qo'shimcha |
-|---|---|---|---|---|
-| 🆓 Bepul | 🎁 1 ta sinov mock (bir marta) | — | — | qolgan mocklar ko'rinmaydi |
-| ⭐ Standard | 30 | 30 | 30 000 so'm / 30 kun | — |
-| 💎 Pro | 60 | 60 | 50 000 so'm / 30 kun | 2 ekspert baholashi |
-| 👑 VIP | 100 | 100 | 70 000 so'm / 30 kun | 2 ekspert baholashi |
+| Tarif | Mocklar | Narx | Qo'shimcha |
+|---|---|---|---|
+| 🆓 Bepul | 🎁 1 ta sinov mock (bir marta) | — | qolgan mocklar ko'rinmaydi |
+| ⭐ Standard | 30 ta mock (30 Konuşma + 30 Yazma) | 59 000 so'm / 30 kun | ro'yxatdagi **birinchi 30 ta** mock ko'rinadi |
+| 💎 Pro | 60 ta mock (60 Konuşma + 60 Yazma) | 109 000 so'm / 30 kun | **birinchi 60 ta** mock, 2 ekspert baholashi |
+
+👑 VIP (100 ta mock) hozircha sotuvda emas: o'quvchiga va to'lov tugmalarida chiqmaydi, avval olganlarda esa obunasi
+tugaguncha ishlaydi. Obunachiga tarifidan keyingi mocklar ko'rinmaydi va ochilmaydi (eski tugma / mini app orqali ham).
+Ko'rinadigan mocklar soni tarif limitiga teng — limitni «⚙️ Sozlamalar»da o'zgartirsangiz, u ham o'zgaradi.
+Yangi narx va limitlar birinchi ishga tushishda bazaga bir marta yoziladi; keyin admin bemalol o'zgartira oladi.
 
 Limit **mock** bilan o'lchanadi: mockning Konuşma (yoki Yazma) qismini birinchi marta ishlash — 1 ta; shu davrda
 uning qolgan qismlari bepul. Har qism bir marta ishlanadi: ishlangan qism ✅ bilan yopiladi, biror qismi
