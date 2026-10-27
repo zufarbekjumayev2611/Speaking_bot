@@ -16,6 +16,7 @@ from aiohttp import web
 
 import db
 import ops
+import plans
 import roles
 from boss import router as boss_router
 from bot import router
@@ -90,6 +91,7 @@ async def main():
     logging.info("Ma'lumotlar bazasi: %s", db.backend_name())
     await db.load_admins()
     await db.load_blocked()
+    await plans.apply_update()  # yangi narx va limitlar (bir marta)
     try:
         await mock_seed.ensure_seed()  # birinchi ishga tushishda 5 ta namunaviy mock
     except Exception:

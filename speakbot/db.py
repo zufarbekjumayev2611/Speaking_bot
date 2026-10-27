@@ -722,24 +722,55 @@ async def trial_mock_id() -> int | None:
     return mock_id
 
 
-async def find_mock_by_number(number: int):
-    return await _fetchone("SELECT * FROM mocks WHERE number = ? ORDER BY id LIMIT 1", (number,))
+_order_cache: tuple | None = None
 
 
-async def swap_mocks(a: dict, b: dict):
-    """Ikki mockning joyini (tartib raqamini) almashtiradi - ro'yxatda o'rinlari o'zgaradi, ichidagi savollar o'z
-    mockida qoladi. Standart nom («Mock 3») yangi raqamga moslanadi; admin qo'ygan nom o'zgarmaydi."""
-    statements = []
-    for m, new in ((a, b["number"]), (b, a["number"])):
+async def mock_order() -> list[int]:
+    """Savoli bor mocklar ro'yxat tartibida (raqami bo'yicha) - tarifda «birinchi N ta mock» shu tartibdan.
+    Mocklar o'zgarmaguncha xotiradan olinadi."""
+    global _order_cache
+    if _order_cache and _order_cache[0] == CATALOG_VERSION:
+        return _order_cache[1]
+    version = CATALOG_VERSION
+    rows = await _fetchall(
+        """SELECT m.id FROM mocks m
+           WHERE EXISTS (SELECT 1 FROM exams e JOIN questions q ON q.exam_id = e.id
+                          WHERE e.mock_id = m.id AND e.is_active = 1)
+           ORDER BY m.number, m.id""")
+    _order_cache = (version, [r["id"] for r in rows])
+    return _order_cache[1]
+
+
+async def shuffle_mocks(upto: int) -> list[tuple[str, int, int]]:
+    """Ro'yxatdagi birinchi `upto` ta mockni o'zaro aralashtiradi (tartib raqamlari almashadi): ichidagi savollar
+    va natijalar o'z mockida qoladi, faqat ro'yxatdagi o'rni o'zgaradi. Standart nom («Mock 3», «Mock 3 • Part 1.1»)
+    yangi raqamga moslanadi; admin qo'ygan nom o'zgarmaydi. [(eski nom, eski raqam, yangi raqam)] qaytaradi."""
+    import random
+    mocks = await _fetchall("SELECT * FROM mocks ORDER BY number, id LIMIT ?", (int(upto),))
+    if len(mocks) < 2:
+        return []
+    if not setting(TRIAL_KEY):  # sinov mock tanlanmagan - aralashtirishda almashib ketmasin, hozirgisini qotiramiz
+        trial = await trial_mock_id()
+        if trial:
+            await set_setting(TRIAL_KEY, str(trial))
+    numbers = [m["number"] for m in mocks]
+    new = numbers[:]
+    while new == numbers:  # kamida bitta mock o'rnini o'zgartirsin
+        random.shuffle(new)
+    statements, moves = [], []
+    for m, num in zip(mocks, new):
         old = m["number"]
-        title = f"Mock {new}" if m["title"] == f"Mock {old}" else m["title"]
+        if old == num:
+            continue
+        title = f"Mock {num}" if m["title"] == f"Mock {old}" else m["title"]
         statements += [
-            ("UPDATE mocks SET number = ?, title = ? WHERE id = ?", (new, title, m["id"])),
-            # qismlar nomi: «Mock 3 • Part 1.1» -> «Mock 7 • Part 1.1»
+            ("UPDATE mocks SET number = ?, title = ? WHERE id = ?", (num, title, m["id"])),
             ("UPDATE exams SET title = ? || substr(title, ?) WHERE mock_id = ? AND title LIKE ?",
-             (f"Mock {new} •", len(f"Mock {old} •") + 1, m["id"], f"Mock {old} •%")),
+             (f"Mock {num} •", len(f"Mock {old} •") + 1, m["id"], f"Mock {old} •%")),
         ]
+        moves.append((m["title"], old, num))
     await _execute_many(statements)
+    return moves
 
 
 async def rename_mock(mock_id: int, title: str):

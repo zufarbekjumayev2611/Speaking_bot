@@ -92,7 +92,8 @@ async def pay_start(event, state: FSMContext):
         if isinstance(event, CallbackQuery):
             return await event.answer(text, show_alert=True)
         return await message.answer(text)
-    rows = [[InlineKeyboardButton(text=_plan_line(p), callback_data=f"pay_p:{p}")] for p in plans.PAID]
+    current = (await db.get_premium(uid) or {}).get("plan")
+    rows = [[InlineKeyboardButton(text=_plan_line(p), callback_data=f"pay_p:{p}")] for p in plans.on_sale(current)]
     rows.append([InlineKeyboardButton(text="❌ Bekor qilish", callback_data="pay_x")])
     card = card_text()
     restart = await access.limit_reached(uid)
@@ -116,7 +117,7 @@ async def pay_cancel(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("pay_p:"))
 async def pay_plan(callback: CallbackQuery, state: FSMContext):
     plan = callback.data.split(":")[1]
-    if plan not in plans.PAID:
+    if plan not in plans.on_sale((await db.get_premium(callback.from_user.id) or {}).get("plan")):
         return await callback.answer()
     await state.set_state(PayCheck.photo)
     await state.update_data(plan=plan)
@@ -128,7 +129,7 @@ async def pay_plan(callback: CallbackQuery, state: FSMContext):
 
 def _admin_kb(payment_id: int, chosen: str) -> InlineKeyboardMarkup:
     ok = [InlineKeyboardButton(text=f"{'⭐ ' if p == chosen else ''}✅ {plans.PLANS[p]['name']}",
-                               callback_data=f"pay_ok:{payment_id}:{p}") for p in plans.PAID]
+                               callback_data=f"pay_ok:{payment_id}:{p}") for p in plans.on_sale(chosen)]
     return InlineKeyboardMarkup(inline_keyboard=[ok, [InlineKeyboardButton(text="❌ Rad etish", callback_data=f"pay_no:{payment_id}")]])
 
 

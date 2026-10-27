@@ -118,10 +118,16 @@ async def mock_opened(user_id: int, kind: str, exam: dict | None) -> bool:
 
 # ---------------------------------------------------------------- 🎁 sinov mock (bepul tarif)
 # Bepul foydalanuvchiga faqat bitta sinov mock ko'rinadi va ochiladi (har qismi bir marta); qolgan mocklar -
-# faqat ⭐ Standard / 💎 Pro / 👑 VIP obunachilari uchun.
+# faqat obunachilar uchun. Obunachiga esa tarifi bo'yicha ro'yxatdagi birinchi N ta mock ochiq
+# (⭐ Standard - 30, 💎 Pro - 60; plans.mocks_for), qolganlari unga ham ko'rinmaydi.
 
-TRIAL_ONLY_MSG = ("🔒 Bu mock faqat obunachilar uchun (⭐ Standard, 💎 Pro, 👑 VIP). Bepul tarifda — faqat 🎁 sinov "
+TRIAL_ONLY_MSG = ("🔒 Bu mock faqat obunachilar uchun (⭐ Standard, 💎 Pro). Bepul tarifda — faqat 🎁 sinov "
                   "mock. Tarifni «🚀 Tarifni yaxshilash» bo'limidan tanlang.")
+
+
+def plan_locked_msg(plan: str) -> str:
+    return (f"🔒 Bu mock tarifingizga kirmaydi: {plans.name(plan)} — birinchi {plans.mocks_for(plan)} ta mock. "
+            "Ko'proq mock — «🚀 Tarifni yaxshilash».")
 
 
 async def free_trial_only(user_id: int) -> bool:
@@ -129,11 +135,32 @@ async def free_trial_only(user_id: int) -> bool:
     return PREMIUM_ENABLED and not is_admin(user_id) and await get_plan(user_id) == "free"
 
 
+async def visible_mocks(user_id: int) -> set[int] | None:
+    """Foydalanuvchiga ochiq mocklar (None - hammasi): bepulda - sinov mock, obunachida - tarifi bo'yicha
+    ro'yxatdagi birinchi N ta mock, adminlarga va premium tizimi o'chiq bo'lsa - hammasi."""
+    if not PREMIUM_ENABLED or is_admin(user_id):
+        return None
+    plan = await get_plan(user_id)
+    if plan == "free":
+        trial = await db.trial_mock_id()
+        return {trial} if trial else set()
+    n = plans.mocks_for(plan)
+    return None if n is None else set((await db.mock_order())[:n])
+
+
+async def lock_reason(user_id: int, exam: dict | None) -> str | None:
+    """Mock foydalanuvchiga yopiq bo'lsa - sababi (o'quvchiga ko'rsatiladi), ochiq bo'lsa None."""
+    if not exam or not exam.get("mock_id"):
+        return None
+    visible = await visible_mocks(user_id)
+    if visible is None or exam["mock_id"] in visible:
+        return None
+    plan = await get_plan(user_id)
+    return TRIAL_ONLY_MSG if plan == "free" else plan_locked_msg(plan)
+
+
 async def mock_locked(user_id: int, exam: dict | None) -> bool:
-    """Test sinov bo'lmagan mockning qismi va foydalanuvchi bepul tarifda - yopiq."""
-    if not exam or not exam.get("mock_id") or not await free_trial_only(user_id):
-        return False
-    return exam["mock_id"] != await db.trial_mock_id()
+    return await lock_reason(user_id, exam) is not None
 
 
 async def trial_status(user_id: int) -> str:
@@ -151,8 +178,9 @@ async def check_access(user_id: int, kind: str, _extra: int = 0, exam: dict | No
         return True, ""
     if user_id in config.BLOCKED_IDS:
         return False, "Siz botdan foydalanishdan chetlatilgansiz. Savollar bo'lsa admin bilan bog'laning."
-    if await mock_locked(user_id, exam):
-        return False, TRIAL_ONLY_MSG
+    locked = await lock_reason(user_id, exam)
+    if locked:
+        return False, locked
     if not PREMIUM_ENABLED or is_own(exam, user_id):
         return True, ""
     if _extra == 0 and await mock_opened(user_id, kind, exam):
@@ -195,8 +223,9 @@ async def acquire_check(user_id: int, kind: str) -> tuple[bool, str]:
 async def reserve(user_id: int, kind: str, exam: dict | None) -> tuple[bool, str, bool]:
     """Baholashdan oldin: (ruxsat, sabab, joy band qilindimi). Shu davrda ochilgan mock (yoki o'z testi) -
     limit olinmaydi (band qilinmaydi). Band qilingan bo'lsa, baholashdan keyin release_check() shart."""
-    if await mock_locked(user_id, exam):  # obuna imtihon davomida tugagan bo'lishi mumkin
-        return False, TRIAL_ONLY_MSG, False
+    locked = await lock_reason(user_id, exam)  # obuna imtihon davomida tugagan bo'lishi mumkin
+    if locked:
+        return False, locked, False
     if is_admin(user_id) or is_own(exam, user_id) or (PREMIUM_ENABLED and await mock_opened(user_id, kind, exam)):
         if user_id in config.BLOCKED_IDS:
             return False, "Siz botdan foydalanishdan chetlatilgansiz.", False
@@ -232,7 +261,7 @@ async def usage_text(user_id: int) -> str:
 async def usage_block(user_id: int) -> str:
     """Profil va tarif sahifasi uchun chiroyli blok: har bo'lim bo'yicha chiziq va qachon yangilanishi."""
     if await free_trial_only(user_id):
-        return await trial_status(user_id) + "\n🔓 Qolgan mocklar — ⭐ Standard, 💎 Pro va 👑 VIP obunachilari uchun"
+        return await trial_status(user_id) + "\n🔓 Qolgan mocklar — ⭐ Standard va 💎 Pro obunachilari uchun"
     lines, info = [], None
     for kind, icon in (("speaking", "🎙"), ("writing", "✍️")):
         info = await usage(user_id, kind)

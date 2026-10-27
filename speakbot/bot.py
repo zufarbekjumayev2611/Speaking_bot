@@ -35,8 +35,8 @@ import grader
 import report
 import roles
 import writing
-from access import (REDO_MSG, TRIAL_ONLY_MSG, already_done, check_access, done_counts, done_parts, free_trial_only,
-                    limit_reached, mock_locked, mocks_done, usage_block, usage_text)
+from access import (REDO_MSG, already_done, check_access, done_counts, done_parts, free_trial_only, get_plan,
+                    limit_reached, lock_reason, mocks_done, usage_block, usage_text, visible_mocks)
 import payments
 from config import EXAM_LANGUAGE, WEBAPP_URL, is_admin, is_owner
 from languages import LANGUAGES
@@ -372,9 +372,12 @@ async def _mocks_view(user_id: int, page: int = 0, kind: str | None = None):
         _mock_catalog(), db.user_done(user_id), db.get_premium(user_id))
     mocks = [m for m in catalog if not kind or m[kind]]
     trial_only = await free_trial_only(user_id)
-    if trial_only:  # bepul tarif: faqat sinov mock ko'rinadi, qolganlari - obunachilarga
-        trial = await db.trial_mock_id()
-        mocks = [m for m in mocks if m["id"] == trial]
+    # bepul tarif: faqat sinov mock; obunachi: tarifi bo'yicha birinchi N ta mock (Standard 30, Pro 60)
+    visible = await visible_mocks(user_id)
+    hidden = 0
+    if visible is not None:
+        hidden = sum(1 for m in mocks if m["id"] not in visible)
+        mocks = [m for m in mocks if m["id"] in visible]
     pages = max(1, -(-len(mocks) // MOCK_PAGE))
     page = min(max(page, 0), pages - 1)
     chunk = mocks[page * MOCK_PAGE:(page + 1) * MOCK_PAGE]
@@ -400,7 +403,7 @@ async def _mocks_view(user_id: int, page: int = 0, kind: str | None = None):
     renew = not trial_only and await limit_reached(user_id, kind)
     if trial_only:
         lines.append(f"\n{await usage_text(user_id)}\n<i>Bepul tarifda sizga 🎁 <b>1 ta sinov mock</b> ochiq — uni "
-                     "<b>bir marta</b> ishlaysiz. Qolgan barcha mocklar ⭐ Standard, 💎 Pro va 👑 VIP obunachilari "
+                     "<b>bir marta</b> ishlaysiz. Qolgan barcha mocklar ⭐ Standard va 💎 Pro obunachilari "
                      "uchun.</i>")
     elif config.PREMIUM_ENABLED and not is_admin(user_id):
         lines.append(f"\n💼 {await usage_text(user_id)}\n<i>Mockni ochsangiz, limitdan 1 ta olinadi. Har bir qism "
@@ -409,9 +412,17 @@ async def _mocks_view(user_id: int, page: int = 0, kind: str | None = None):
         lines.append("\n🔄 <b>Limitingiz tugadi.</b> Kutish shart emas — «🔄 Yangi 30 kun boshlash» tugmasi bilan "
                      "tarifni qayta oling: obuna hozirdan yangi 30 kunga boshlanadi va limit to'liq yangilanadi.")
         upgrade = [payments.renew_button()]
+    more = False
+    if hidden and not trial_only:  # obunachi: tarifiga kirmagan mocklar bor - sotuvda kattaroq tarif bo'lsa taklif
+        plan = await get_plan(user_id)
+        mine = plans.mocks_for(plan) or 0
+        more = any((plans.mocks_for(p) or 10**9) > mine for p in plans.ON_SALE)
+    if more:
+        lines.append(f"\n🔒 {plans.name(plan)} tarifida birinchi <b>{plans.mocks_for(plan)}</b> ta mock ochiq. "
+                     f"Yana <b>{hidden}</b> ta mock — kattaroq tarifda («{BTN_PREMIUM}»).")
     if not mocks:
         lines.append("\nHozircha tayyor mock yo'q — tez orada qo'shiladi.")
-        return "\n".join(lines), (InlineKeyboardMarkup(inline_keyboard=[upgrade]) if trial_only or renew else None)
+        return "\n".join(lines), (InlineKeyboardMarkup(inline_keyboard=[upgrade]) if trial_only or renew or more else None)
     if trial_only:
         lines.append("\nTanlang 👇")
     else:
@@ -422,7 +433,7 @@ async def _mocks_view(user_id: int, page: int = 0, kind: str | None = None):
     buttons = [B(text=f"{'✅ ' if m['id'] in done else ''}{gift}{m['title']}{badges(m)}"[:40],
                  callback_data=f"{open_cb}:{m['id']}") for m in chunk]
     rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
-    if trial_only or renew:
+    if trial_only or renew or more:
         rows.append(upgrade)
     suffix = f":{_KIND_KEY[kind]}" if kind else ""
     if pages > 1:
@@ -486,8 +497,8 @@ async def _mock_or_alert(callback: CallbackQuery) -> dict | None:
     m = await _find_mock(int(callback.data.split(":")[1]))
     if not m:
         await callback.answer("Bu mock hozir yopiq.", show_alert=True)
-    elif await mock_locked(callback.from_user.id, {"mock_id": m["id"]}):  # eski xabardagi tugma
-        await callback.answer(TRIAL_ONLY_MSG, show_alert=True)
+    elif reason := await lock_reason(callback.from_user.id, {"mock_id": m["id"]}):  # eski xabardagi tugma
+        await callback.answer(reason, show_alert=True)
         return None
     return m
 
@@ -974,7 +985,7 @@ async def _admin_mock_view(mock_id: int):
                  "darhol ko'rinadi; 🔥 Full mock — 4 ta Konuşma qismi ham tayyor bo'lganda.")
     if await db.trial_mock_id() == mock_id:
         lines.append("\n🎁 <b>Bu — sinov mock.</b> Bepul foydalanuvchilar faqat shu mockni ko'radi va bir marta ishlaydi; "
-                     "qolgan mocklar ⭐ Standard, 💎 Pro va 👑 VIP obunachilari uchun.")
+                     "qolgan mocklar ⭐ Standard va 💎 Pro obunachilari uchun.")
     else:
         lines.append("\n🔒 Bu mock faqat obunachilarga ko'rinadi.")
         rows.append([B(text="🎁 Sinov mock qilish", callback_data=f"mkat:{mock_id}")])
@@ -1080,40 +1091,79 @@ async def admin_mock_delete(callback: CallbackQuery):
 
 
 class SwapMock(StatesGroup):
-    numbers = State()
+    upto = State()
+
+
+def _shuffle_ask_kb(total: int) -> InlineKeyboardMarkup:
+    B = InlineKeyboardButton
+    opts = [n for n in (30, 60) if n < total] + [total]
+    labels = [B(text=(f"Hammasi (1–{n})" if n == total else f"1–{n} gacha"), callback_data=f"mksh:{n}") for n in opts]
+    return InlineKeyboardMarkup(inline_keyboard=[labels[i:i + 2] for i in range(0, len(labels), 2)]
+                                + [[B(text="❌ Bekor qilish", callback_data="adm_exams")]])
 
 
 @router.callback_query(F.data == "mksw")
 async def admin_mock_swap_ask(callback: CallbackQuery, state: FSMContext):
     if not _admin_only(callback.from_user.id):
         return await callback.answer()
+    total = await db.count_mocks()
+    if total < 2:
+        return await callback.answer("Aralashtirish uchun kamida 2 ta mock kerak.", show_alert=True)
     await state.clear()
-    await state.set_state(SwapMock.numbers)
+    await state.set_state(SwapMock.upto)
     await callback.message.answer(
-        "🔀 <b>Mocklarni almashtirish</b>\n\nJoyini almashtiradigan ikki mockning <b>raqamini</b> yozing, masalan: "
-        "<code>2 5</code> — Mock 2 va Mock 5 o'rin almashadi (savollari o'z mockida qoladi).\nBekor qilish: /cancel",
-        parse_mode="HTML")
+        "🔀 <b>Mocklarni almashtirish</b>\n\nQaysi mockgacha aralashtiramiz? Masalan, <b>60</b> — ro'yxatdagi "
+        "1–60 gacha bo'lgan mocklar o'zaro joy almashadi (savollari va natijalari o'z mockida qoladi).\n\n"
+        f"Tugmani tanlang yoki raqam yozing (2–{total}). Bekor qilish: /cancel",
+        parse_mode="HTML", reply_markup=_shuffle_ask_kb(total))
     await callback.answer()
 
 
-@router.message(SwapMock.numbers)
-async def admin_mock_swap(message: Message, state: FSMContext):
+async def _shuffle_confirm(target: Message, upto: int):
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🔀 Ha, aralashtirish", callback_data=f"mksh_go:{upto}"),
+        InlineKeyboardButton(text="❌ Yo'q", callback_data="adm_exams"),
+    ]])
+    await target.answer(f"🔀 Ro'yxatdagi <b>1–{upto}</b> gacha bo'lgan mocklar o'zaro aralashtirilsinmi?\n"
+                        "<i>Obunachilarga ko'rinadigan mocklar ham shu tartib bo'yicha o'zgaradi "
+                        "(⭐ Standard — birinchi 30 ta, 💎 Pro — birinchi 60 ta).</i>",
+                        parse_mode="HTML", reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("mksh:"))
+async def admin_mock_shuffle_pick(callback: CallbackQuery, state: FSMContext):
+    if not _admin_only(callback.from_user.id):
+        return await callback.answer()
+    await state.clear()
+    await _shuffle_confirm(callback.message, int(callback.data.split(":")[1]))
+    await callback.answer()
+
+
+@router.message(SwapMock.upto)
+async def admin_mock_shuffle_typed(message: Message, state: FSMContext):
     if not _admin_only(message.from_user.id):
         return
-    nums = [int(x) for x in re.findall(r"\d+", message.text or "")[:3]]
-    if len(nums) != 2 or nums[0] == nums[1]:
-        return await message.answer("Ikki xil raqam yozing, masalan: <code>2 5</code>. Bekor qilish: /cancel",
-                                    parse_mode="HTML")
-    a, b = await asyncio.gather(*(db.find_mock_by_number(n) for n in nums))
-    missing = [str(n) for n, m in zip(nums, (a, b)) if not m]
-    if missing:
-        return await message.answer(f"Mock {', '.join(missing)} topilmadi. Raqamlarni tekshirib, qayta yozing. "
-                                    "Bekor qilish: /cancel")
+    total = await db.count_mocks()
+    digits = re.findall(r"\d+", message.text or "")
+    upto = int(digits[0]) if digits else 0
+    if not 2 <= upto <= total:
+        return await message.answer(f"2 dan {total} gacha raqam yozing, masalan <code>{min(60, total)}</code>. "
+                                    "Bekor qilish: /cancel", parse_mode="HTML")
     await state.clear()
-    await db.swap_mocks(a, b)
+    await _shuffle_confirm(message, upto)
+
+
+@router.callback_query(F.data.startswith("mksh_go:"))
+async def admin_mock_shuffle(callback: CallbackQuery):
+    if not _admin_only(callback.from_user.id):
+        return await callback.answer()
+    upto = int(callback.data.split(":")[1])
+    moves = await db.shuffle_mocks(upto)
     text, kb = await _admin_mocks_view()
-    await message.answer(f"✅ Almashtirildi: <b>{e(a['title'])}</b> ↔ <b>{e(b['title'])}</b>.\n\n" + text,
-                         parse_mode="HTML", reply_markup=kb)
+    head = (f"✅ 1–{upto} gacha mocklar aralashtirildi: {len(moves)} ta mockning o'rni o'zgardi.\n\n" if moves
+            else "Aralashtirish uchun kamida 2 ta mock kerak.\n\n")
+    await callback.message.edit_text(head + text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer("Aralashtirildi 🔀" if moves else "")
 
 
 class RenameMock(StatesGroup):
