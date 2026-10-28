@@ -145,6 +145,7 @@ _MIGRATIONS = [
     "ALTER TABLE exams ADD COLUMN mock_id INTEGER",  # qaysi mockning qismi (NULL - eski, alohida test)
     # obunaning 30 kunlik limit davrlari shu vaqtdan sanaladi (NULL - eski yozuv: tugash sanasidan orqaga)
     "ALTER TABLE premium ADD COLUMN period_start TEXT",
+    "ALTER TABLE payments ADD COLUMN reason TEXT",  # chek rad etilgan bo'lsa - o'quvchiga aytilgan sabab
 ]
 
 
@@ -1319,11 +1320,13 @@ async def pending_payment(telegram_id: int):
                            "AND created_at > datetime('now', '-3 days') ORDER BY id DESC LIMIT 1", (telegram_id,))
 
 
-async def decide_payment(payment_id: int, status: str, admin_id: int, plan: str | None = None) -> bool:
-    """Chekni hal qiladi; False - uni boshqa admin allaqachon hal qilgan (bitta chek ikki marta tasdiqlanmasin)."""
-    sql = ("UPDATE payments SET status = ?, decided_by = ?, decided_plan = ?, decided_at = datetime('now') "
+async def decide_payment(payment_id: int, status: str, admin_id: int, plan: str | None = None,
+                         reason: str | None = None) -> bool:
+    """Chekni hal qiladi; False - uni boshqa admin allaqachon hal qilgan (bitta chek ikki marta tasdiqlanmasin).
+    reason - rad etish sababi (o'quvchiga yuborilgan matn)."""
+    sql = ("UPDATE payments SET status = ?, decided_by = ?, decided_plan = ?, reason = ?, decided_at = datetime('now') "
            "WHERE id = ? AND status = 'pending'")
-    params = (status, admin_id, plan, payment_id)
+    params = (status, admin_id, plan, reason, payment_id)
     if _turso:
         return (await _turso.execute(sql, params)).rowcount > 0
     conn = await _get()
