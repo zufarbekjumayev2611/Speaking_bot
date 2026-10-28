@@ -140,6 +140,10 @@ adminlarga keladi; admin summaga mos tarif tugmasini (Standard / Pro / VIP) bosa
 beriladi va o'quvchiga xabar boradi («❌ Rad etish» ham bor). Karta raqami: Boss → ⚙️ Sozlamalar → «💳 Karta raqami»
 (yoki Render'da `CARD_NUMBER`). Admin username: `ADMIN_CONTACT` (standart `@muhammad_hocam`).
 
+**Chekni rad etish:** «❌ Rad etish» bosilganda sabab so'raladi — 💸 Kam to'lov qilingan (o'quvchiga tanlagan tarifi
+narxi yoziladi), ❓ Pul tushmagan, 🧾 Chek noto'g'ri, 🔁 Avval yuborilgan yoki «✍️ Sababni o'zim yozaman». O'quvchiga sabab
+va «🔁 Chekni qayta yuborish» tugmasi boradi; sabab bazada (`payments.reason`) saqlanadi.
+
 **To'lov qo'lda:** 👥 Foydalanuvchilar → foydalanuvchini tanlang (yoki 💎 Premium → ➕ Premium berish) → tarif (Standard/Pro/VIP) → muddat (30/90/180/365 yoki istalgan kun) → to'lov izohi. Foydalanuvchiga xabar boradi; faol obunaga qayta berilsa, muddat uzayadi. Tugashiga 3 kun qolganda bot foydalanuvchiga o'zi eslatadi.
 
 **Admin panel:**
