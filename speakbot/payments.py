@@ -146,7 +146,8 @@ async def pay_plan(callback: CallbackQuery, state: FSMContext):
 def _admin_kb(payment_id: int, chosen: str) -> InlineKeyboardMarkup:
     ok = [InlineKeyboardButton(text=f"{'⭐ ' if p == chosen else ''}✅ {plans.PLANS[p]['name']}",
                                callback_data=f"pay_ok:{payment_id}:{p}") for p in plans.on_sale(chosen)]
-    return InlineKeyboardMarkup(inline_keyboard=[ok, [InlineKeyboardButton(text="❌ Rad etish", callback_data=f"pay_no:{payment_id}")]])
+    rows = [ok[i:i + 2] for i in range(0, len(ok), 2)]  # 6 ta tarif bitta qatorga sig'maydi - 2 tadan
+    return InlineKeyboardMarkup(inline_keyboard=[*rows, [InlineKeyboardButton(text="❌ Rad etish", callback_data=f"pay_no:{payment_id}")]])
 
 
 @router.message(PayCheck.photo, F.photo | F.document)

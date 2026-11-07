@@ -1404,9 +1404,13 @@ async def get_stats() -> dict:
              (SELECT COUNT(*) FROM premium WHERE until > datetime('now') AND plan = 'standard') AS standard,
              (SELECT COUNT(*) FROM premium WHERE until > datetime('now') AND plan = 'pro') AS pro,
              (SELECT COUNT(*) FROM premium WHERE until > datetime('now') AND plan = 'vip') AS vip,
+             (SELECT COUNT(*) FROM premium WHERE until > datetime('now') AND plan = 'sp30') AS sp30,
+             (SELECT COUNT(*) FROM premium WHERE until > datetime('now') AND plan = 'sp60') AS sp60,
+             (SELECT COUNT(*) FROM premium WHERE until > datetime('now') AND plan = 'wr30') AS wr30,
+             (SELECT COUNT(*) FROM premium WHERE until > datetime('now') AND plan = 'wr60') AS wr60,
              (SELECT COUNT(*) FROM mocks) AS mocks"""
     )  # bitta so'rov: admin / Boss paneli tez ochilsin
-    row["premium"] = row["standard"] + row["pro"] + row["vip"]
+    row["premium"] = row["standard"] + row["pro"] + row["vip"] + row["sp30"] + row["sp60"] + row["wr30"] + row["wr60"]
     return row
 
 
@@ -1465,7 +1469,7 @@ async def set_blocked(telegram_id: int, blocked: bool):
 # ---------- Ommaviy xabar uchun auditoriya ----------
 
 async def broadcast_ids(audience: str) -> list[int]:
-    """audience: all | free | standard | pro | vip | premium"""
+    """audience: all | free | standard | pro | vip | sp30 | sp60 | wr30 | wr60 | premium"""
     now = _now().strftime(_FMT)
     base = ("SELECT u.telegram_id FROM users u LEFT JOIN premium p ON p.telegram_id = u.telegram_id AND p.until > ? "
             "WHERE COALESCE(u.blocked, 0) = 0 AND u.full_name IS NOT NULL")  # botga yozmagan (faqat bloklangan) - yo'q
@@ -1475,6 +1479,10 @@ async def broadcast_ids(audience: str) -> list[int]:
         "standard": " AND p.plan = 'standard'",
         "pro": " AND p.plan = 'pro'",
         "vip": " AND p.plan = 'vip'",
+        "sp30": " AND p.plan = 'sp30'",
+        "sp60": " AND p.plan = 'sp60'",
+        "wr30": " AND p.plan = 'wr30'",
+        "wr60": " AND p.plan = 'wr60'",
         "premium": " AND p.telegram_id IS NOT NULL",
     }[audience]
     return [r["telegram_id"] for r in await _fetchall(base + cond, (now,))]

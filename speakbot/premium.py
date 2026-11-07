@@ -203,7 +203,7 @@ async def _trial_upsell(bot, user_id: int, exam: dict | None, kind: str):
     if not done or not need <= done:
         return  # bo'limning hali ishlanmagan qismlari bor
     head = (f"🎉 <b>Sinov mockning {plans.KIND_LABEL[kind]} bo'limini tugatdingiz!</b>\n"
-            "Natijangiz yuqorida. Qolgan barcha mocklar — ⭐ Standard va 💎 Pro obunachilari uchun. "
+            "Natijangiz yuqorida. Qolgan barcha mocklar — obunachilar uchun. "
             "Davom etish uchun tarifni tanlang 👇")
     text, kb = await tariffs_view(user_id, head)
     await bot.send_message(user_id, text, parse_mode="HTML", reply_markup=kb)
@@ -267,13 +267,15 @@ async def _premium_view():
     rows = await db.list_active_premium(12)
     std, pro = await db.count_active_premium("standard"), await db.count_active_premium("pro")
     vip = await db.count_active_premium("vip")
+    single = {p: await db.count_active_premium(p) for p in plans.SINGLE}
     soon = await db.list_expiring_premium(7, 6)
-    lines = [f"💎 <b>Premium</b>\n⭐ Standard: <b>{std}</b> • 💎 Pro: <b>{pro}</b> • 👑 VIP: <b>{vip}</b>\n"]
+    lines = [f"💎 <b>Premium</b>\n⭐ Standard: <b>{std}</b> • 💎 Pro: <b>{pro}</b> • 👑 VIP: <b>{vip}</b>\n"
+             f"🎙 {single['sp30']} • 🎤 {single['sp60']} • ✍️ {single['wr30']} • 📝 {single['wr60']}\n"]
     if not PREMIUM_ENABLED:
         lines.append("⚠️ Premium tizimi o'chirilgan (PREMIUM_ENABLED=0) — hamma uchun cheksiz.\n")
     for r in rows:
         lines.append(f"• {plans.PLANS.get(r['plan'], plans.PLANS['pro'])['icon']} {_who(r)} — {_local(r['until'])} gacha")
-    total = std + pro + vip
+    total = std + pro + vip + sum(single.values())
     if total > len(rows):
         lines.append(f"… va yana {total - len(rows)} ta")
     if soon:
@@ -322,7 +324,8 @@ async def _ask_plan(target: Message, state: FSMContext, user: dict):
     await target.answer(
         f"👤 {_who(user)}{now}\n\nQaysi tarif?\n" + "\n".join(plans.offer_line(p) for p in plans.ON_SALE),
         parse_mode="HTML",
-        reply_markup=_kb([[_btn(plans.name(p), f"pgp:{user['telegram_id']}:{p}") for p in plans.ON_SALE]]),
+        reply_markup=_kb([[_btn(plans.name(p), f"pgp:{user['telegram_id']}:{p}") for p in plans.ON_SALE[i:i + 2]]
+                          for i in range(0, len(plans.ON_SALE), 2)]),
     )
 
 
@@ -891,6 +894,8 @@ async def stats_view(callback: CallbackQuery):
         f"🔥 Oxirgi 7 kunda faol: <b>{s['active_week']}</b>\n"
         f"🚫 Bloklangan: <b>{s['blocked']}</b>\n\n"
         f"⭐ Standard: <b>{s['standard']}</b> • 💎 Pro: <b>{s['pro']}</b> • 👑 VIP: <b>{s['vip']}</b>\n"
+        f"🎙 Konuşma 30: <b>{s['sp30']}</b> • 🎤 Konuşma 60: <b>{s['sp60']}</b> • "
+        f"✍️ Yazma 30: <b>{s['wr30']}</b> • 📝 Yazma 60: <b>{s['wr60']}</b>\n"
         f"🧾 30 kunda berilgan obunalar: <b>{s['grants_month']}</b>\n\n"
         f"🎙 Speaking: <b>{s['speaking']}</b> • ✍️ Writing: <b>{s['writing']}</b>\n"
         f"📅 Tekshiruvlar — bugun: <b>{s['today']}</b>, 7 kun: <b>{s['week']}</b>, 30 kun: <b>{s['month']}</b>"

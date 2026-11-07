@@ -20,9 +20,15 @@ PLANS = {
     "standard": {"name": "Standard", "icon": "⭐", "price": 59000, "limits": {"speaking": 30, "writing": 30}, "raters": 1},
     "pro": {"name": "Pro", "icon": "💎", "price": 109000, "limits": {"speaking": 60, "writing": 60}, "raters": 2},
     "vip": {"name": "VIP", "icon": "👑", "price": 70000, "limits": {"speaking": 100, "writing": 100}, "raters": 2},
+    # Faqat bitta yo'nalish uchun tariflar (limit 0 - o'sha bo'lim bu tarifda yo'q)
+    "sp30": {"name": "Konuşma 30", "icon": "🎙", "price": 29000, "limits": {"speaking": 30, "writing": 0}, "raters": 1},
+    "sp60": {"name": "Konuşma 60", "icon": "🎤", "price": 49000, "limits": {"speaking": 60, "writing": 0}, "raters": 1},
+    "wr30": {"name": "Yazma 30", "icon": "✍️", "price": 29000, "limits": {"speaking": 0, "writing": 30}, "raters": 1},
+    "wr60": {"name": "Yazma 60", "icon": "📝", "price": 49000, "limits": {"speaking": 0, "writing": 60}, "raters": 1},
 }
-PAID = ("standard", "pro", "vip")  # pullik tariflar (statistika, mavjud obunalar)
-ON_SALE = ("standard", "pro")       # o'quvchiga sotiladigan tariflar (VIP hozircha chiqarilmaydi)
+SINGLE = ("sp30", "sp60", "wr30", "wr60")  # faqat Konuşma yoki faqat Yazma tariflari
+PAID = ("standard", "pro", "vip", *SINGLE)  # pullik tariflar (statistika, mavjud obunalar)
+ON_SALE = ("standard", "pro", *SINGLE)       # o'quvchiga sotiladigan tariflar (VIP hozircha chiqarilmaydi)
 
 # Bir martalik yangilash: yangi narx va limitlar bazadagi eski sozlamalar ustidan bir marta yoziladi
 # (keyin admin «⚙️ Sozlamalar» dan bemalol o'zgartiradi - qayta ishga tushganda qaytib ketmaydi).
@@ -82,9 +88,18 @@ def limits_text(plan: str) -> str:
     if plan == "free" and PREMIUM_ENABLED:
         return "🎁 1 ta sinov mock (bir marta)"
     s, w = limit_for(plan, "speaking"), limit_for(plan, "writing")
+    if w == 0:
+        return f"{_count(s)} ta Konuşma mock (Yazma yo'q)"
+    if s == 0:
+        return f"{_count(w)} ta Yazma mock (Konuşma yo'q)"
     if s == w:
         return f"{_count(s)} ta mock (Konuşma + Yazma)"
     return f"{_count(s)} Konuşma + {_count(w)} Yazma mock"
+
+
+def has_kind(plan: str, kind: str) -> bool:
+    """Tarifda shu bo'lim (speaking | writing) bormi: bir yo'nalishli tarifda ikkinchisining limiti 0."""
+    return plan == "free" or limit_for(plan, kind) != 0
 
 
 def mocks_for(plan: str) -> int | None:

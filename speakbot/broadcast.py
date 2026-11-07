@@ -25,6 +25,10 @@ AUDIENCES = {
     "standard": "⭐ Standard obunachilarga",
     "pro": "💎 Pro obunachilarga",
     "vip": "👑 VIP obunachilarga",
+    "sp30": "🎙 Konuşma 30 obunachilarga",
+    "sp60": "🎤 Konuşma 60 obunachilarga",
+    "wr30": "✍️ Yazma 30 obunachilarga",
+    "wr60": "📝 Yazma 60 obunachilarga",
 }
 SEND_DELAY = 0.05  # soniyasiga ~20 ta xabar (Telegram limiti ~30)
 _running = False
