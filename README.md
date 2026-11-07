@@ -117,6 +117,18 @@ kichik raqamli mock. Ro'yxatda sinov mock 🎁 bilan belgilanadi. `PREMIUM_ENABL
 | ⭐ Standard | 30 ta mock (30 Konuşma + 30 Yazma) | 59 000 so'm / 30 kun | ro'yxatdagi **birinchi 30 ta** mock ko'rinadi |
 | 💎 Pro | 60 ta mock (60 Konuşma + 60 Yazma) | 109 000 so'm / 30 kun | **birinchi 60 ta** mock, 2 ekspert baholashi |
 
+**Faqat bir yo'nalishli tariflar** (30 kun, ikkinchi bo'lim bu tarifda yo'q):
+
+| Tarif | Narx | Limit |
+|---|---|---|
+| 🎙 Konuşma 30 | 29 000 so'm | 30 ta Konuşma mock |
+| 🎤 Konuşma 60 | 49 000 so'm | 60 ta Konuşma mock |
+| ✍️ Yazma 30 | 29 000 so'm | 30 ta Yazma mock |
+| 📝 Yazma 60 | 49 000 so'm | 60 ta Yazma mock |
+
+Yopiq bo'lim (masalan Konuşma tarifida Yazma) ochilmaydi va o'quvchiga tegishli tarif haqida xabar chiqadi
+(`plans.py` da limit `0`). Narx va limitlar «⚙️ Sozlamalar»dan o'zgartiriladi.
+
 👑 VIP (100 ta mock) hozircha sotuvda emas: o'quvchiga va to'lov tugmalarida chiqmaydi, avval olganlarda esa obunasi
 tugaguncha ishlaydi. Obunachiga tarifidan keyingi mocklar ko'rinmaydi va ochilmaydi (eski tugma / mini app orqali ham).
 Ko'rinadigan mocklar soni tarif limitiga teng — limitni «⚙️ Sozlamalar»da o'zgartirsangiz, u ham o'zgaradi.

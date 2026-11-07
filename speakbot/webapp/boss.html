@@ -56,6 +56,8 @@
   .pill { display: inline-block; font-size: 12px; font-weight: 650; padding: 2px 9px; border-radius: 999px; background: var(--surface2); color: var(--text); white-space: nowrap; }
   .p-standard { background: color-mix(in srgb, var(--std) 18%, transparent); color: var(--std); }
   .p-pro { background: color-mix(in srgb, var(--pro) 18%, transparent); color: var(--pro); }
+  .p-sp30, .p-wr30 { background: color-mix(in srgb, var(--std) 18%, transparent); color: var(--std); }
+  .p-sp60, .p-wr60 { background: color-mix(in srgb, var(--pro) 18%, transparent); color: var(--pro); }
   .p-vip { background: color-mix(in srgb, var(--vip) 20%, transparent); color: var(--vip); }
   .s-pending { background: color-mix(in srgb, var(--amber) 20%, transparent); color: var(--amber); }
   .s-approved { background: color-mix(in srgb, var(--turq) 18%, transparent); color: var(--turq); }
@@ -131,7 +133,7 @@
   <section id="tab-sales" hidden>
     <div class="filters">
       <input id="salesQ" type="search" placeholder="O'quvchi yoki admin ismi…" aria-label="Sotuvlarni qidirish">
-      <select id="salesPlan" aria-label="Tarif"><option value="">Hamma tariflar</option><option value="standard">⭐ Standard</option><option value="pro">💎 Pro</option><option value="vip">👑 VIP</option></select>
+      <select id="salesPlan" aria-label="Tarif"><option value="">Hamma tariflar</option><option value="standard">⭐ Standard</option><option value="pro">💎 Pro</option><option value="vip">👑 VIP</option><option value="sp30">🎙 Konuşma 30</option><option value="sp60">🎤 Konuşma 60</option><option value="wr30">✍️ Yazma 30</option><option value="wr60">📝 Yazma 60</option></select>
     </div>
     <p class="muted" id="salesSum"></p>
     <div class="list" id="sales"></div>
@@ -149,7 +151,7 @@
   <section id="tab-users" hidden>
     <div class="filters">
       <input id="userQ" type="search" placeholder="Ism, @username yoki ID…" aria-label="O'quvchini qidirish">
-      <select id="userPlan" aria-label="Tarif"><option value="">Hamma tariflar</option><option value="free">🆓 Bepul</option><option value="standard">⭐ Standard</option><option value="pro">💎 Pro</option><option value="vip">👑 VIP</option></select>
+      <select id="userPlan" aria-label="Tarif"><option value="">Hamma tariflar</option><option value="free">🆓 Bepul</option><option value="standard">⭐ Standard</option><option value="pro">💎 Pro</option><option value="vip">👑 VIP</option><option value="sp30">🎙 Konuşma 30</option><option value="sp60">🎤 Konuşma 60</option><option value="wr30">✍️ Yazma 30</option><option value="wr60">📝 Yazma 60</option></select>
     </div>
     <p class="muted" id="usersTotal"></p>
     <div class="list" id="users"></div>
@@ -183,7 +185,7 @@ const $ = (id) => document.getElementById(id);
 const initData = tg?.initData || "";
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const money = (n) => Math.round(Number(n) || 0).toLocaleString("ru-RU").replace(/,/g, " ") + " so'm";
-const PLAN = { free: "🆓 Bepul", standard: "⭐ Standard", pro: "💎 Pro", vip: "👑 VIP" };
+const PLAN = { free: "🆓 Bepul", standard: "⭐ Standard", pro: "💎 Pro", vip: "👑 VIP", sp30: "🎙 Konuşma 30", sp60: "🎤 Konuşma 60", wr30: "✍️ Yazma 30", wr60: "📝 Yazma 60" };
 const STATUS = { pending: "⏳ Kutilmoqda", approved: "✅ Tasdiqlangan", rejected: "❌ Rad etilgan" };
 const pill = (plan) => `<span class="pill p-${esc(plan)}">${esc(PLAN[plan] || plan || "—")}</span>`;
 const who = (name, username, id) => esc(name || (id ? "ID " + id : "—")) + (username ? ` <span class="muted">@${esc(username)}</span>` : "");
@@ -261,14 +263,14 @@ function renderHome() {
   ].join("");
   $("pendingBadge").hidden = !s.pending_payments;
   $("pendingBadge").textContent = s.pending_payments;
-  const color = { standard: "var(--std)", pro: "var(--pro)", vip: "var(--vip)" };
+  const color = { standard: "var(--std)", pro: "var(--pro)", vip: "var(--vip)", sp30: "var(--std)", sp60: "var(--pro)", wr30: "var(--std)", wr60: "var(--pro)" };
   const maxSum = Math.max(1, ...r.by_plan.map((p) => p.sum));
   $("planBars").innerHTML = r.by_plan.map((p) => `<div class="bar"><span>${esc(p.icon)} ${esc(p.name)}</span>
     <div class="track"><div class="fill" style="width:${(100 * p.sum / maxSum).toFixed(1)}%;background:${color[p.plan]}"></div></div>
     <span class="num">${p.count} ta • ${money(p.sum)}</span></div>`).join("");
   $("revNote").textContent = r.approx ? `Aniq to'langan: ${money(r.exact)} • taxminiy (≈): ${money(r.approx)} — summasi yozilmagan qo'lda berilgan obunalar.` : "Hamma summalar aniq.";
   const maxSub = Math.max(1, ...Object.values(s.by_plan));
-  $("subBars").innerHTML = ["standard", "pro", "vip"].map((p) => `<div class="bar"><span>${PLAN[p]}</span>
+  $("subBars").innerHTML = ["standard", "pro", "vip", "sp30", "sp60", "wr30", "wr60"].map((p) => `<div class="bar"><span>${PLAN[p]}</span>
     <div class="track"><div class="fill" style="width:${(100 * s.by_plan[p] / maxSub).toFixed(1)}%;background:${color[p]}"></div></div>
     <span class="num">${s.by_plan[p]} ta</span></div>`).join("") +
     `<p class="muted">Jami ${s.users} o'quvchidan ${s.subscribers} tasi obunachi. Mocklar: ${s.mocks} ta. Bloklangan: ${s.blocked}.</p>`;

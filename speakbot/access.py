@@ -46,6 +46,8 @@ async def limit_reached(user_id: int, kind: str | None = None) -> bool:
         return False
     for k in ([kind] if kind else plans.KINDS):
         u = await usage(user_id, k)
+        if u["limit"] == 0:
+            continue  # bu tarifda bunday bo'lim yo'q (masalan Konuşma tarifida Yazma)
         if u["limit"] is not None and u["used"] >= u["limit"]:
             return True
     return False
@@ -121,7 +123,7 @@ async def mock_opened(user_id: int, kind: str, exam: dict | None) -> bool:
 # faqat obunachilar uchun. Obunachiga esa tarifi bo'yicha ro'yxatdagi birinchi N ta mock ochiq
 # (⭐ Standard - 30, 💎 Pro - 60; plans.mocks_for), qolganlari unga ham ko'rinmaydi.
 
-TRIAL_ONLY_MSG = ("🔒 Bu mock faqat obunachilar uchun (⭐ Standard, 💎 Pro). Bepul tarifda — faqat 🎁 sinov "
+TRIAL_ONLY_MSG = ("🔒 Bu mock faqat obunachilar uchun. Bepul tarifda — faqat 🎁 sinov "
                   "mock. Tarifni «🚀 Tarifni yaxshilash» bo'limidan tanlang.")
 
 
@@ -183,6 +185,12 @@ async def check_access(user_id: int, kind: str, _extra: int = 0, exam: dict | No
         return False, locked
     if not PREMIUM_ENABLED or is_own(exam, user_id):
         return True, ""
+    plan = await get_plan(user_id)
+    if not plans.has_kind(plan, kind):
+        other = "Yazma" if kind == "speaking" else "Konuşma"
+        return False, (f"🔒 {plans.KIND_LABEL[kind]} bo'limi {plans.name(plan)} tarifiga kirmaydi — bu tarif faqat "
+                       f"{plans.KIND_LABEL['writing' if kind == 'speaking' else 'speaking']} uchun. "
+                       f"{plans.KIND_LABEL[kind]} uchun alohida tarif oling: «🚀 Tarifni yaxshilash».")
     if _extra == 0 and await mock_opened(user_id, kind, exam):
         return True, ""
     u = await usage(user_id, kind)
@@ -248,6 +256,8 @@ async def usage_text(user_id: int) -> str:
     parts, info = [], None
     for kind, icon in (("speaking", "🎙"), ("writing", "✍️")):
         info = await usage(user_id, kind)
+        if info["limit"] == 0 and info["plan"] != "free":
+            continue  # tarifda yo'q bo'lim ko'rsatilmaydi
         lim = "cheksiz" if info["limit"] is None else str(info["limit"])
         parts.append(f"{icon} {plans.KIND_LABEL[kind]}: <b>{info['used']}/{lim}</b> mock")
     text = " • ".join(parts)
@@ -261,10 +271,12 @@ async def usage_text(user_id: int) -> str:
 async def usage_block(user_id: int) -> str:
     """Profil va tarif sahifasi uchun chiroyli blok: har bo'lim bo'yicha chiziq va qachon yangilanishi."""
     if await free_trial_only(user_id):
-        return await trial_status(user_id) + "\n🔓 Qolgan mocklar — ⭐ Standard va 💎 Pro obunachilari uchun"
+        return await trial_status(user_id) + "\n🔓 Qolgan mocklar — obunachilar uchun"
     lines, info = [], None
     for kind, icon in (("speaking", "🎙"), ("writing", "✍️")):
         info = await usage(user_id, kind)
+        if info["limit"] == 0 and info["plan"] != "free":
+            continue  # tarifda yo'q bo'lim ko'rsatilmaydi
         lim = "∞" if info["limit"] is None else str(info["limit"])
         lines.append(f"{icon} {plans.KIND_LABEL[kind]}  {plans.bar(info['used'], info['limit'])}  <b>{info['used']}/{lim}</b> mock")
     if info["plan"] == "free":

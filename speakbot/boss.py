@@ -82,7 +82,8 @@ async def boss_view():
     """👑 Boss paneli - hamma narsa bir joyda: bugungi holat, pul, jamoa, va barcha bo'limlar tugmalari."""
     m, admins, st, pending = await asyncio.gather(_money(30), db.list_admins(), db.get_stats(),
                                                   db.count_pending_payments())  # parallel - bitta kutish
-    plan_line = f"⭐ {st['standard']} • 💎 {st['pro']} • 👑 {st['vip']}"
+    plan_line = (f"⭐ {st['standard']} • 💎 {st['pro']} • 👑 {st['vip']}\n"
+                 f"🎙 {st['sp30']} • 🎤 {st['sp60']} • ✍️ {st['wr30']} • 📝 {st['wr60']}")
     approx = "" if m["exact"] else " <i>(≈ bir qismi)</i>"
     wait = f"⏳ Kutilayotgan cheklar: <b>{pending}</b> — tasdiqlang 👇" if pending else "✅ Kutilayotgan chek yo'q"
     lines = [

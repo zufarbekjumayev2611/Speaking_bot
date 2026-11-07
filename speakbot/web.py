@@ -485,7 +485,7 @@ async def submit_writing(request: web.Request):
 
 # ---------- Tashqi tizim uchun: foydalanuvchilar ro'yxati ----------
 
-_API_PLANS = ("free", "standard", "pro", "vip")
+_API_PLANS = ("free", *plans.PAID)
 
 
 def _iso(stamp: str | None) -> str | None:
