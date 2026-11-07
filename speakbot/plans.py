@@ -102,6 +102,14 @@ def has_kind(plan: str, kind: str) -> bool:
     return plan == "free" or limit_for(plan, kind) != 0
 
 
+def swaps_kind(current: str | None, new: str) -> bool:
+    """Faol bir yo'nalishli tarif o'rniga boshqa yo'nalishli tarif olinyaptimi (masalan Konuşma 30 -> Yazma 30):
+    obuna bitta, shuning uchun eski tarifning bo'limi yo'qoladi."""
+    if not current or current not in SINGLE or new not in SINGLE or current == new:
+        return False
+    return has_kind(current, "speaking") != has_kind(new, "speaking")
+
+
 def mocks_for(plan: str) -> int | None:
     """Tarifda ro'yxatda nechta mock ko'rinadi (birinchi N ta; None - hammasi): limit bilan bir xil -
     Standard 30, Pro 60."""
