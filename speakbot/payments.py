@@ -137,8 +137,13 @@ async def pay_plan(callback: CallbackQuery, state: FSMContext):
         return await callback.answer()
     await state.set_state(PayCheck.photo)
     await state.update_data(plan=plan)
+    cur = await db.get_premium(callback.from_user.id)
+    warn = ""
+    if cur and plans.swaps_kind(cur["plan"], plan) and not await access.limit_reached(callback.from_user.id):
+        warn = (f"⚠️ Sizda faol <b>{e(plans.name(cur['plan']))}</b> bor. Boshqa yo'nalish tarifi tasdiqlansa, tarifingiz "
+                "<b>almashadi</b> va eski bo'lim yopiladi. Ikkala bo'lim kerak bo'lsa — ⭐ Standard yoki 💎 Pro oling.\n\n")
     await callback.message.edit_text(
-        f"Tarif: <b>{e(_plan_line(plan))}</b>\n\n📸 Endi to'lov <b>chekining rasmini</b> (skrinshot yoki PDF) shu yerga "
+        f"Tarif: <b>{e(_plan_line(plan))}</b>\n\n{warn}📸 Endi to'lov <b>chekining rasmini</b> (skrinshot yoki PDF) shu yerga "
         "yuboring. Bekor qilish: /cancel", parse_mode="HTML")
     await callback.answer()
 
@@ -167,7 +172,7 @@ async def pay_receipt(message: Message, state: FSMContext):
     caption = (f"💳 <b>Yangi to'lov cheki #{pid}</b>\n"
                f"👤 {e(u.full_name)}{handle} (<code>{u.id}</code>)\n"
                f"📦 Tanlagan tarifi: <b>{e(_plan_line(plan))}</b>\n"
-               + await _restart_line(u.id) + "\n"
+               + await _restart_line(u.id, plan) + "\n"
                f"Pul tushganini tekshiring va summaga mos tarifni bosing — obuna {PAY_DAYS} kunga beriladi.")
     sent = 0
     for admin_id in config.all_admin_ids():
@@ -206,15 +211,20 @@ async def pay_card_again(callback: CallbackQuery):
     handle = f" @{e(u['username'])}" if u.get("username") else ""
     caption = (f"💳 <b>To'lov cheki #{pay['id']}</b>\n👤 {e(u.get('full_name') or pay['telegram_id'])}{handle} "
                f"(<code>{pay['telegram_id']}</code>)\n📦 Tanlagan tarifi: <b>{e(_plan_line(pay['plan']))}</b>\n"
-               + await _restart_line(pay["telegram_id"]) + "\n"
+               + await _restart_line(pay["telegram_id"], pay["plan"]) + "\n"
                f"Pul tushganini tekshiring va summaga mos tarifni bosing — obuna {PAY_DAYS} kunga beriladi.")
     send = callback.message.answer_photo if pay["file_type"] == "photo" else callback.message.answer_document
     await send(pay["file_id"], caption=caption, parse_mode="HTML", reply_markup=_admin_kb(pay["id"], pay["plan"]))
     await callback.answer()
 
 
-async def _restart_line(user_id: int) -> str:
+async def _restart_line(user_id: int, plan: str | None = None) -> str:
     """Admin uchun: tasdiqlansa obuna uzaytiriladimi yoki hozirdan qayta boshlanadimi."""
+    cur = await db.get_premium(user_id)
+    if plan and cur and plans.swaps_kind(cur["plan"], plan) and not await access.limit_reached(user_id):
+        return (f"⚠️ Faol obunasi bor: <b>{e(plans.name(cur['plan']))}</b> — tanlangan tarif boshqa yo'nalish. "
+                "Tasdiqlansa tarif <b>almashadi</b> (eski bo'lim yopiladi, kunlar qo'shiladi). Ikkala bo'lim kerak bo'lsa — "
+                "Standard / Pro tarifini tasdiqlang.\n")
     if await access.limit_reached(user_id):
         return "🔄 Limiti tugagan — tasdiqlansa obuna <b>hozirdan yangi 30 kunga</b> boshlanadi (to'liq limit).\n"
     if await db.get_premium(user_id):
@@ -283,7 +293,9 @@ async def pay_approve(callback: CallbackQuery):
             + ("🔄 Obunangiz yangidan boshlandi — limit to'liq yangilandi.\n" if restart else "")
             + f"{e(plans.name(plan))} faollashtirildi — "
             f"<b>{_local(until)}</b> gacha.\nHar 30 kunda: {plans.limits_text(plan)}"
-            + (" • 2 ekspert baholashi" if plans.raters_for(plan) > 1 else "") + ".\n\n«🎙 Konuşma» va «✍️ Yazma» — omad! 🚀",
+            + (" • 2 ekspert baholashi" if plans.raters_for(plan) > 1 else "") + ".\n\n"
+            + {"sp30": "«🎙 Konuşma»", "sp60": "«🎙 Konuşma»", "wr30": "«✍️ Yazma»",
+               "wr60": "«✍️ Yazma»"}.get(plan, "«🎙 Konuşma» va «✍️ Yazma»") + " — omad! 🚀",
             parse_mode="HTML")
         note = ""
     except Exception:

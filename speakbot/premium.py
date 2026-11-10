@@ -150,18 +150,6 @@ async def tariffs_view(uid: int, head: str = "") -> tuple[str, InlineKeyboardMar
         lines += [f"{head}{mark}", "   " + " • ".join(extra), ""]
     lines += [
         "━━━━━━━━━━━━━━━━",
-        "ℹ️ Limit <b>mock</b> bilan o'lchanadi: mockning Konuşma (yoki Yazma) qismini birinchi marta ishlaganda — "
-        "1 ta; uning qolgan qismlari shu davrda bepul. Har qism <b>bir marta</b> ishlanadi — ishlangan mockni qayta "
-        "ishlab bo'lmaydi. "
-        "<i>2 ekspert</i> — ishingizni ikki mustaqil AI ekspert baholaydi, ball aniqroq.",
-        "",
-        f"📅 <b>Muddat:</b> pullik tarif to'lov qilingan kundan boshlab <b>{plans.PERIOD_DAYS} kun</b> amal qiladi — "
-        "limit shu 30 kun uchun beriladi. Keyingi oy yana to'lov qilsangiz, yangi 30 kun va yangi limit boshlanadi. "
-        "Bepul tarifda — faqat 🎁 <b>1 ta sinov mock</b> (bir marta); qolgan mocklar obunachilarga ochiladi.",
-        "",
-        "🔄 <b>Limit muddatidan oldin tugadimi?</b> Kutish shart emas — istalgan tarifni qayta sotib oling: obuna "
-        "<b>hozirdan</b> yangi 30 kunga boshlanadi va limit to'liq yangilanadi.",
-        "",
         f"📌 Sizning tarifingiz: <b>{e(plans.name(plan))}</b>" + (f" — {_local(prem['until'])} gacha" if prem else ""),
         await usage_block(uid),
         "",
