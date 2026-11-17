@@ -107,6 +107,16 @@ to'liq ishlanishi bilan bot o'quvchiga tariflar sahifasini («🚀 Tarifni yaxsh
 Qaysi mock sinov: Admin → 📚 Mocklar → mockni oching → «🎁 Sinov mock qilish». Tanlanmagan bo'lsa — savoli bor eng
 kichik raqamli mock. Ro'yxatda sinov mock 🎁 bilan belgilanadi. `PREMIUM_ENABLED=0` bo'lsa cheklov yo'q.
 
+## 📷 Qo'lyozma rasmi (Yazma, chatda yozish)
+
+Yazma matnini xabar o'rniga qo'lyozma **rasmi** qilib yuborish mumkin («💬 Chatda yozish» rejimida). Claude rasmni
+so'zma-so'z matnga o'giradi (xatolarni tuzatmaydi, o'qib bo'lmagan so'z — `[?]`), bot «Men shunday o'qidim» deb
+ko'rsatadi, o'quvchi «✅ To'g'ri, tekshirilsin» bosgach matn odatdagidek baholanadi. Baholash va limit o'zgarmagan.
+- Faqat `ANTHROPIC_API_KEY` bo'lganda ishlaydi (Groq rasmni ko'rmaydi); kalit yo'q bo'lsa matn yozish so'raladi.
+- Bitta matn uchun ko'pi bilan 3 ta rasm (`PHOTO_TRIES`), rasm ≤ 5 MB. Telegram «rasm» sifatida siqadi —
+  mayda yozuv uchun «fayl» qilib yuborish aniqroq.
+- Taxminiy sarf: rasm ≈ 1 500 kirish + 400–600 chiqish token (o'qish), baholash — avvalgidek.
+
 ## Tariflar va admin panel
 
 **Tariflar** — Konuşma va Yazma limiti **alohida** hisoblanadi:
