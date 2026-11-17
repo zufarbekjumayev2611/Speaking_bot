@@ -19,6 +19,7 @@ from config import (
     ANTHROPIC_API_KEY,
     WRITING_GRADER,
     CLAUDE_MODEL,
+    TRANSCRIBE_MODEL,
     EXAM_LANGUAGE,
     GRADER_MODEL,
     GRADER_PROVIDER,
@@ -260,7 +261,7 @@ async def transcribe_handwriting(image: bytes, media_type: str) -> str:
     """Rasmdagi yozma ishni matnga aylantiradi (xatolari tuzatilmaydi). Matn topilmasa - bo'sh qator."""
     import base64
     payload = {
-        "model": CLAUDE_MODEL,
+        "model": TRANSCRIBE_MODEL,
         "max_tokens": 6000,
         "system": TRANSCRIBE_SYSTEM,
         "messages": [{"role": "user", "content": [
@@ -269,7 +270,7 @@ async def transcribe_handwriting(image: bytes, media_type: str) -> str:
             {"type": "text", "text": "Rasmdagi matnni so'zma-so'z ko'chir."},
         ]}],
     }
-    if CLAUDE_MODEL.startswith(_SAMPLING_MODELS):
+    if TRANSCRIBE_MODEL.startswith(_SAMPLING_MODELS):
         payload["temperature"] = 0
     else:
         payload["output_config"] = {"effort": "low"}  # ko'chirish uchun chuqur o'ylash kerak emas - arzonroq
