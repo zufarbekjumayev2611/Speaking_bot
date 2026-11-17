@@ -46,6 +46,9 @@ if GRADER_PROVIDER not in ("groq", "claude"):
     raise RuntimeError("GRADER_PROVIDER faqat 'groq' yoki 'claude' bo'lishi mumkin.")
 GRADER_MODEL = os.getenv("GRADER_MODEL", "openai/gpt-oss-120b")          # Groq modeli
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-5-5")
+# Yazma: qo'lyozma RASMINI matnga o'girish modeli (baholashdan alohida: o'qish aniqligi muhim, narxi ~0.8 sent/rasm).
+# Haiku'ga qaytarish uchun: TRANSCRIBE_MODEL=claude-haiku-5-5
+TRANSCRIBE_MODEL = os.getenv("TRANSCRIBE_MODEL", "claude-sonnet-5-5").strip() or "claude-sonnet-5-5"
 # Yazma (writing) kim baholaydi: "claude" (standart - turkchani aniqroq biladi; ANTHROPIC_API_KEY bo'lmasa Groq) yoki "groq"
 WRITING_GRADER = os.getenv("WRITING_GRADER", "claude").strip().lower()              # Claude modeli
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
