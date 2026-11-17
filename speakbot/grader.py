@@ -254,13 +254,17 @@ So'z lug'atdagi shaklga o'xshamasa yoki xato yozilgan bo'lsa ham - o'quvchi nima
   harfni ham, qo'shib yoki ajratib yozilgan so'zlarni ham (masalan "birçok" / "bir çok"), noto'g'ri qo'shimchalarni ham saqla.
 - Katta-kichik harfni, tinish belgilarini (yo'q bo'lsa - yo'q, noto'g'ri bo'lsa - noto'g'ri) aynan saqla; apostrofni o'zing qo'shma.
 - Abzaslarni va qatorlarni saqla (abzas orasida bo'sh qator). Qator oxiridagi defis bilan bo'lingan so'zni birlashtirib yoz.
+- DIAKRITIK BELGILARGA ALOHIDA DIQQAT: s, c, g, i, o, u harflarini ko'rganingda har safar tekshir - ostida dumcha (ş, ç),
+  ustida yoy (ğ), ustida ikki nuqta (ö, ü) bormi, i ning nuqtasi bormi yoki nuqtasiz ı mi. Belgi RASMDA BOR bo'lsa - uni
+  ALBATTA yoz (sen ularni tushirib qoldirishga moyilsan: "çok" ni "cok", "şukur" ni "sukur", "kapalı" ni "kapali" deb
+  yozma). Belgi YO'Q bo'lsa - o'zingdan qo'shma. Ikkala holatda ham ko'rganingni yoz, "to'g'ri imlo"ni emas.
 - Yozishdan OLDIN har bir so'zni qayta tekshir: yozgan harflaring rasmdagi harflar bilan bir xilmi? Agar yozgan shaklingni
   "to'g'ri imlo"ga rasmdagidan ko'ra yaqinroq deb sezsang - to'xta va rasmga qayta qara: sen tuzatib yuborgan bo'lishing mumkin.
 - Misollar (rasmdagi yozuv -> sen yozadigan matn): nuqtali "i" bilan yozilgan "Nasilsin" -> Nasilsin (Nasılsın EMAS);
   "yapıcam" -> yapıcam (yapacağım EMAS); "Sende" -> Sende (Sen de EMAS); "birçok" va "bir çok" - qanday yozilgan bo'lsa shunday;
   "gidiyom" -> gidiyom (gidiyorum EMAS); katta harf kerak bo'lgan joyda kichik harf yozilgan bo'lsa - kichik harf.
-  Diakritiksiz yozilgan so'zlar ham shunday qoladi: "sukur" -> sukur (Şükür EMAS), "cok" -> cok (çok EMAS),
-  "kapali" -> kapali (Kapalı EMAS). Ya'ni ş, ç, ğ, ü, ö, ı belgisi YOZILMAGAN bo'lsa - sen ham qo'shma.
+  Diakritik belgilar bor so'zlar ham aynan shunday: "çok" -> çok (cok EMAS), "kapalı" -> kapalı (kapali EMAS),
+  "şukur" -> şukur (sukur ham, şükür ham EMAS: ş bor, lekin u ustida nuqta yo'q - o'quvchi shunday yozgan).
 - Aniq o'qib bo'lmaydigan so'z o'rniga [?] qo'y; taxmin bilan so'z to'qima va "ehtimol shu" deb to'g'ri so'zni qo'yma.
 - Faqat o'quvchi yozgan matnni yoz; sarlavha, raqam yoki ball belgisi, rasmdagi tashqi yozuvlar (kanal reklamasi, ism-sharif
   maydoni) va chizib tashlangan so'zlarni qo'shma. Izoh, tarjima yoki tuzatish yozma.
@@ -678,7 +682,7 @@ async def grade_writing(tasks, texts: dict, part: str | None, raters: int | None
             if photo:
                 user += ("\n\nESLATMA: bu matn qo'lyozma RASMIDAN o'qilgan. Nuqtali va nuqtasiz i (i/ı) farqi o'qish xatosi "
                          "bo'lishi mumkin - uni xato deb ko'rsatma va shu sababli ballni tushirma. Boshqa barcha imlo "
-                         "xatolarini (ş, ç, ğ, ü, ö belgisi tushib qolgan so'zlar ham: cok, sukur) va grammatika "
+                         "xatolarini (ş, ç, ğ, ü, ö belgisi tushib qolgan so'zlar ham) va grammatika "
                          "xatolarini odatdagidek baholagin.")
             res = await _grade_component("writing", writing_prompt(c), user, c["max"], raters, answer)
             res["mistakes"] = await verify_mistakes(answer, res["mistakes"])
