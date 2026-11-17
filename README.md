@@ -118,7 +118,7 @@ ko'rsatadi, o'quvchi «✅ To'g'ri, tekshirilsin» bosgach matn odatdagidek baho
 - Faqat `ANTHROPIC_API_KEY` bo'lganda ishlaydi (Groq rasmni ko'rmaydi); kalit yo'q bo'lsa matn yozish so'raladi.
 - **`ı/i` (nuqtali/nuqtasiz i) xatolari rasmdan o'qilgan matnda hisobga olinmaydi:** faqat shu farqdan iborat "xato"lar
   ro'yxatdan chiqariladi va baholovchiga eslatma beriladi (rasmda bu belgi noto'g'ri o'qilishi mumkin). `ş/ç/ğ/ü/ö`
-  belgisi tushib qolgan so'zlar (`cok`, `sukur`) esa haqiqiy xato sifatida baholanadi. Yozib yuborilgan matnga bu qo'llanmaydi.
+  belgisi tushib qolgan so'zlar esa haqiqiy xato sifatida baholanadi. Ko'chirish prompti AI diakritikni (`ş ç ğ ü ö ı`) tushirib qoldirmasligiga alohida urg'u beradi. Yozib yuborilgan matnga bu qo'llanmaydi.
 - Bitta matn uchun ko'pi bilan 3 ta rasm (`PHOTO_TRIES`), rasm ≤ 5 MB. Telegram «rasm» sifatida siqadi —
   mayda yozuv uchun «fayl» qilib yuborish aniqroq.
 - Taxminiy sarf: rasm ≈ 1 500 kirish + 400–600 chiqish token (o'qish, Sonnet 5.5 ≈ $0.008), baholash — avvalgidek.
