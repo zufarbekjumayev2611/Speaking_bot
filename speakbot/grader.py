@@ -259,6 +259,8 @@ So'z lug'atdagi shaklga o'xshamasa yoki xato yozilgan bo'lsa ham - o'quvchi nima
 - Misollar (rasmdagi yozuv -> sen yozadigan matn): nuqtali "i" bilan yozilgan "Nasilsin" -> Nasilsin (Nasılsın EMAS);
   "yapıcam" -> yapıcam (yapacağım EMAS); "Sende" -> Sende (Sen de EMAS); "birçok" va "bir çok" - qanday yozilgan bo'lsa shunday;
   "gidiyom" -> gidiyom (gidiyorum EMAS); katta harf kerak bo'lgan joyda kichik harf yozilgan bo'lsa - kichik harf.
+  Diakritiksiz yozilgan so'zlar ham shunday qoladi: "sukur" -> sukur (Şükür EMAS), "cok" -> cok (çok EMAS),
+  "kapali" -> kapali (Kapalı EMAS). Ya'ni ş, ç, ğ, ü, ö, ı belgisi YOZILMAGAN bo'lsa - sen ham qo'shma.
 - Aniq o'qib bo'lmaydigan so'z o'rniga [?] qo'y; taxmin bilan so'z to'qima va "ehtimol shu" deb to'g'ri so'zni qo'yma.
 - Faqat o'quvchi yozgan matnni yoz; sarlavha, raqam yoki ball belgisi, rasmdagi tashqi yozuvlar (kanal reklamasi, ism-sharif
   maydoni) va chizib tashlangan so'zlarni qo'shma. Izoh, tarjima yoki tuzatish yozma.
@@ -636,18 +638,18 @@ async def verify_mistakes(answer: str, mistakes: list[dict]) -> list[dict]:
     return dedupe_mistakes(mistakes)[:MAX_MISTAKES]
 
 
-_TR_FOLD = str.maketrans({"ı": "i", "İ": "i", "I": "i", "ö": "o", "Ö": "o", "ü": "u", "Ü": "u", "ş": "s", "Ş": "s",
-                          "ç": "c", "Ç": "c", "ğ": "g", "Ğ": "g", "â": "a", "Â": "a", "î": "i", "Î": "i", "û": "u", "Û": "u"})
+_TR_FOLD = str.maketrans({"ı": "i", "İ": "i", "I": "i"})  # faqat nuqtali / nuqtasiz i (qo'lyozmada ajratish eng qiyin)
 
 
 def _fold(text) -> str:
-    """Nuqta / diakritik farqini yo'qotadi (ı=i, ö=o, ü=u, ş=s, ç=c, ğ=g): "Nasılsın" ~ "nasilsin"."""
+    """Nuqtali / nuqtasiz i farqini yo'qotadi (ı=i): "Nasılsın" ~ "nasilsin"."""
     return re.sub(r"\s+", " ", str(text or "").translate(_TR_FOLD).casefold()).strip()
 
 
 def drop_diacritic_only(mistakes: list) -> list:
-    """Qo'lyozma rasmidan o'qilgan matn uchun: faqat nuqta/diakritik farqidan iborat "xato"lar (ı/i, ö/o, ü/u, ş/s, ç/c,
-    ğ/g) olib tashlanadi - rasmda bunday mayda belgini AI noto'g'ri o'qigan bo'lishi mumkin, o'quvchi ayblanmasin."""
+    """Qo'lyozma rasmidan o'qilgan matn uchun: faqat nuqtali/nuqtasiz i (ı/i) farqidan iborat "xato"lar olib tashlanadi -
+    rasmda bu mayda belgini AI noto'g'ri o'qigan bo'lishi mumkin, o'quvchi ayblanmasin. ş/ç/ğ/ü/ö tushib qolgan
+    bo'lsa ("cok", "sukur") - bu haqiqiy xato va baholanadi."""
     return [m for m in mistakes if _fold(m.get("wrong")) != _fold(m.get("correct"))]
 
 
@@ -674,9 +676,10 @@ async def grade_writing(tasks, texts: dict, part: str | None, raters: int | None
             )
             photo = c["key"] in photo_keys
             if photo:
-                user += ("\n\nESLATMA: bu matn qo'lyozma RASMIDAN o'qilgan. Harflardagi nuqta va belgilar farqlari "
-                         "(ı/i, ö/o, ü/u, ş/s, ç/c, ğ/g) o'qish xatosi bo'lishi mumkin - ularni xato deb ko'rsatma va "
-                         "shu sababli ballni tushirma. Boshqa imlo va grammatika xatolarini odatdagidek baholagin.")
+                user += ("\n\nESLATMA: bu matn qo'lyozma RASMIDAN o'qilgan. Nuqtali va nuqtasiz i (i/ı) farqi o'qish xatosi "
+                         "bo'lishi mumkin - uni xato deb ko'rsatma va shu sababli ballni tushirma. Boshqa barcha imlo "
+                         "xatolarini (ş, ç, ğ, ü, ö belgisi tushib qolgan so'zlar ham: cok, sukur) va grammatika "
+                         "xatolarini odatdagidek baholagin.")
             res = await _grade_component("writing", writing_prompt(c), user, c["max"], raters, answer)
             res["mistakes"] = await verify_mistakes(answer, res["mistakes"])
             if photo:
