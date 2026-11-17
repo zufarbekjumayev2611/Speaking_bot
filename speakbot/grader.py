@@ -254,6 +254,8 @@ So'z lug'atdagi shaklga o'xshamasa yoki xato yozilgan bo'lsa ham - o'quvchi nima
   harfni ham, qo'shib yoki ajratib yozilgan so'zlarni ham (masalan "birçok" / "bir çok"), noto'g'ri qo'shimchalarni ham saqla.
 - Katta-kichik harfni, tinish belgilarini (yo'q bo'lsa - yo'q, noto'g'ri bo'lsa - noto'g'ri) aynan saqla; apostrofni o'zing qo'shma.
 - Abzaslarni va qatorlarni saqla (abzas orasida bo'sh qator). Qator oxiridagi defis bilan bo'lingan so'zni birlashtirib yoz.
+- i va ı: nuqta rasmda ANIQ ko'rinsa - "i", nuqta ko'rinmasa (faqat chiziq yoki ilmoq) - "ı" yoz. Hamma joyga "i" qo'yish
+  odatingga aylanmasin: "umarım", "yapıyorsun", "kapalı", "Cevabını", "Nazlı" kabi so'zlarda ko'pincha nuqtasiz ı bo'ladi.
 - DIAKRITIK BELGILARGA ALOHIDA DIQQAT: s, c, g, i, o, u harflarini ko'rganingda har safar tekshir - ostida dumcha (ş, ç),
   ustida yoy (ğ), ustida ikki nuqta (ö, ü) bormi, i ning nuqtasi bormi yoki nuqtasiz ı mi. Belgi RASMDA BOR bo'lsa - uni
   ALBATTA yoz (sen ularni tushirib qoldirishga moyilsan: "çok" ni "cok", "şukur" ni "sukur", "kapalı" ni "kapali" deb
