@@ -966,7 +966,9 @@ async def writing_photo(message: Message, state: FSMContext):
         f"📝 <b>Men shunday o'qidim:</b>\n\n<blockquote>{e(shown)}</blockquote>\n\n"
         f"{e(writing.words_note(comp, n))}\n\n"
         "Baho <b>shu matn</b> bo'yicha beriladi. So'z noto'g'ri o'qilgan bo'lsa (<code>[?]</code> - o'qib bo'lmagan so'z), "
-        "«📷 Qayta yuboraman»ni bosib aniqroq rasm yuboring yoki to'g'rilangan matnni o'zingiz yozib yuboring.",
+        "«📷 Qayta yuboraman»ni bosib aniqroq rasm yuboring yoki to'g'rilangan matnni o'zingiz yozib yuboring.\n"
+        "ℹ️ <i>Nuqtali/nuqtasiz i (i/ı) farqi rasmdan aniq ajratilmaydi — u baholashda xato hisoblanmaydi. "
+        "ş, ç, ğ, ü, ö belgilari esa hisobga olinadi: ular to'g'ri o'qilganini tekshiring.</i>",
         parse_mode="HTML", reply_markup=_photo_confirm_kb())
     await state.update_data(pending=text, pending_msg=ask.message_id, pending_photo=True)
 
