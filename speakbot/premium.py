@@ -8,20 +8,21 @@ To'lov QO'LDA kiritiladi: admin tarif va muddatni tanlab, to'lov izohini yozadi.
 import asyncio
 import html
 import logging
+import os
 from datetime import datetime, timedelta
 
 from aiogram import BaseMiddleware, F, Router
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 import access
 import config
 import payments
 import db
 import plans
-from access import usage_block, usage_text
+from access import usage_text
 from config import ADMIN_IDS, PREMIUM_ENABLED, is_admin, is_owner
 
 log = logging.getLogger("premium")
@@ -129,43 +130,32 @@ async def _send_tariffs(target: Message, uid: int):
         return await target.answer("Hozircha barcha imkoniyatlar hamma uchun cheksiz. 🎉")
     if is_admin(uid):
         return await target.answer("👮 Siz adminsiz — sizda cheklov yo'q.")
-    text, kb = await tariffs_view(uid)
-    await target.answer(text, parse_mode="HTML", reply_markup=kb)
+    await send_tariff_poster(target.bot, target.chat.id, uid)
 
 
-async def tariffs_view(uid: int, head: str = "") -> tuple[str, InlineKeyboardMarkup]:
-    """Tariflar sahifasi: narxlar, limitlar, joriy tarif va to'lov ma'lumoti."""
-    prem = await db.get_premium(uid)
-    plan = prem["plan"] if prem else "free"
-    badges = {"pro": "  🔥 <i>eng ommabop</i>", "vip": "  💰 <i>eng foydali</i>"}
-    lines = ([head, ""] if head else []) + ["🚀 <b>Tarifni yaxshilash</b>", "━━━━━━━━━━━━━━━━"]
-    for p in ["free", *plans.on_sale(plan)]:
-        mark = "  ✅ <i>sizda</i>" if p == plan else badges.get(p, "")
-        head = f"<b>{plans.name(p)}</b>" + (f" — <b>{plans.money(plans.price_for(p))}</b> / {plans.PERIOD_DAYS} kun" if p != "free" else "")
-        extra = [plans.limits_text(p)]
-        if plans.raters_for(p) > 1:
-            extra.append("2 ekspert baholashi")
-        if plans.per_mock(p):
-            extra.append(f"≈ {plans.money(plans.per_mock(p))} / mock")
-        lines += [f"{head}{mark}", "   " + " • ".join(extra), ""]
-    lines += [
-        "━━━━━━━━━━━━━━━━",
-        f"📌 Sizning tarifingiz: <b>{e(plans.name(plan))}</b>" + (f" — {_local(prem['until'])} gacha" if prem else ""),
-        await usage_block(uid),
-        "",
-    ]
-    renew = await access.limit_reached(uid)
-    if renew:
-        lines += [payments.RESTART_NOTE, ""]
-    lines.append(payments.card_block())
-    info = await db.get_setting(INFO_KEY, DEFAULT_INFO)
-    if info and info != DEFAULT_INFO:  # admin yozgan qo'shimcha to'lov ma'lumoti
-        lines += ["", f"ℹ️ {e(info)}"]
-    lines += ["", f"👤 <b>Admin: {e(db.admin_contact())}</b> — savollar bo'lsa shu yerga yozing."]
+POSTER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "tarif.jpg")
+POSTER_KEY = "tariff_poster_file_id"  # Telegram file_id: rasm bir marta yuklanadi, keyin shu id bilan yuboriladi
+
+
+async def send_tariff_poster(bot, chat_id: int, uid: int):
+    """«Tarifni yaxshilash»: tariflar rasmi, ostida karta raqami va chek yuborish tugmalari (boshqa matnsiz)."""
+    card = payments.card_text()
+    caption = f"💳 <code>{e(card)}</code>" if card else f"💳 {e(db.admin_contact())}"
     rows = payments.pay_buttons()
-    if renew:  # limiti tugagan obunachi - asosiy tugma «🔄 Yangi 30 kun boshlash»
+    if await access.limit_reached(uid):  # limiti tugagan obunachi - asosiy tugma «🔄 Yangi 30 kun boshlash»
         rows = [[payments.renew_button()]] + rows[1:]
-    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
+    cached = db.setting(POSTER_KEY)
+    if cached:
+        try:
+            return await bot.send_photo(chat_id, cached, caption=caption, parse_mode="HTML", reply_markup=kb)
+        except Exception:
+            log.info("Saqlangan tarif rasmi yuborilmadi - fayldan qayta yuklanadi")
+    msg = await bot.send_photo(chat_id, FSInputFile(POSTER_PATH), caption=caption, parse_mode="HTML", reply_markup=kb)
+    try:
+        await db.set_setting(POSTER_KEY, msg.photo[-1].file_id)
+    except Exception:
+        log.warning("Tarif rasmi file_id sini saqlab bo'lmadi", exc_info=True)
 
 
 async def trial_upsell(bot, user_id: int, exam: dict | None, kind: str):
@@ -190,11 +180,9 @@ async def _trial_upsell(bot, user_id: int, exam: dict | None, kind: str):
         need |= {"1", "2"} if kind == "writing" and ex.get("part") == "full" else {ex.get("part")}
     if not done or not need <= done:
         return  # bo'limning hali ishlanmagan qismlari bor
-    head = (f"🎉 <b>Sinov mockning {plans.KIND_LABEL[kind]} bo'limini tugatdingiz!</b>\n"
-            "Natijangiz yuqorida. Qolgan barcha mocklar — obunachilar uchun. "
-            "Davom etish uchun tarifni tanlang 👇")
-    text, kb = await tariffs_view(user_id, head)
-    await bot.send_message(user_id, text, parse_mode="HTML", reply_markup=kb)
+    await bot.send_message(user_id, f"🎉 <b>Sinov mockning {plans.KIND_LABEL[kind]} bo'limini tugatdingiz!</b>",
+                           parse_mode="HTML")
+    await send_tariff_poster(bot, user_id, user_id)
 
 
 # ======================================================================
