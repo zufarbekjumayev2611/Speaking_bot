@@ -688,7 +688,7 @@ def _ask_component_text(part: str | None, values: dict, step: int) -> str:
     hint = f"\n📌 <i>{e(instruction)}</i>\n" if instruction else ""
     return (
         f"✏️ {num}<b>{e(c['name'])}</b> — {e(c['words'])}.{hint}\n"
-        "Matnni <b>bitta xabar</b> qilib yuboring. Bekor qilish: /cancel"
+        "Matnni <b>bitta xabar</b> qilib yuboring yoki 📷 <b>qo'lyozmangiz rasmini</b> yuboring. Bekor qilish: /cancel"
     )
 
 
@@ -788,7 +788,8 @@ async def writing_answer_redo(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
-    await callback.message.answer("✏️ Matnni to'ldirib, bitta xabar qilib qayta yuboring. Bekor qilish: /cancel")
+    await callback.message.answer("✏️ Matnni to'ldirib bitta xabar qilib yoki yangi, aniqroq rasm qilib qayta yuboring. "
+                                  "Bekor qilish: /cancel")
 
 
 async def _accept_component(target: Message, state: FSMContext, text: str, user):
@@ -806,7 +807,7 @@ async def _accept_component(target: Message, state: FSMContext, text: str, user)
     note = writing.words_note(comps[step], writing.count_words(text))
 
     if step + 1 < len(comps):  # keyingi matnni so'raymiz
-        await state.update_data(step=step + 1, texts=texts, pending=None)
+        await state.update_data(step=step + 1, texts=texts, pending=None, photo_tries=0)
         values = writing.task_values(part, await db.get_writing_task(exam["id"]))
         return await target.answer(
             f"✅ <b>{e(comps[step]['name'])}</b> qabul qilindi. {note}\n\n" + _ask_component_text(part, values, step + 1),
@@ -905,9 +906,68 @@ async def writing_answer_waiting(message: Message, state: FSMContext):
     )
 
 
+PHOTO_TRIES = 3  # bitta matn uchun ko'pi bilan nechta rasm o'qiladi (har biri AI xarajati)
+PHOTO_TYPES = set(grader.VISION_TYPES)
+
+
+def _photo_confirm_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ To'g'ri, tekshirilsin", callback_data="wa_ok"),
+        InlineKeyboardButton(text="📷 Qayta yuboraman", callback_data="wa_redo"),
+    ]])
+
+
+@router.message(WritingAnswer.text, F.photo | (F.document & F.document.mime_type.in_(PHOTO_TYPES)))
+async def writing_photo(message: Message, state: FSMContext):
+    """Qo'lyozma rasmi: AI matnga o'giradi, o'quvchi tasdiqlagach matn odatdagidek tekshiriladi."""
+    data = await state.get_data()
+    exam = await db.get_exam(data.get("exam_id", 0))
+    if not exam:
+        await state.clear()
+        return await message.answer("Mavzu topilmadi. Qaytadan tanlang.")
+    if not grader.vision_available():
+        return await message.answer("Hozircha rasm qabul qilinmaydi — matnni xabar qilib yozib yuboring.")
+    tries = data.get("photo_tries", 0)
+    if tries >= PHOTO_TRIES:
+        return await message.answer(f"Bu matn uchun rasm yuborish limiti tugadi ({PHOTO_TRIES} ta). "
+                                    "Matnni xabar qilib yozib yuboring.")
+    if message.photo:
+        file_id, media_type, size = message.photo[-1].file_id, "image/jpeg", message.photo[-1].file_size
+    else:
+        file_id, media_type, size = message.document.file_id, message.document.mime_type, message.document.file_size
+    if (size or 0) > grader.VISION_MAX_BYTES:
+        return await message.answer("Rasm hajmi katta (5 MB dan oshmasin). Kichikroq rasm yuboring.")
+
+    await state.update_data(photo_tries=tries + 1)
+    wait = await message.answer("⏳ Qo'lyozma o'qilmoqda...")
+    try:
+        buf = await message.bot.download(file_id)
+        text = await grader.transcribe_handwriting(buf.read(), media_type)
+    except Exception as err:
+        log.warning("Qo'lyozmani o'qib bo'lmadi", exc_info=True)
+        busy = getattr(err, "status", None) == 429
+        return await wait.edit_text("Hozir rasm o'qish navbati band, birozdan keyin qayta yuboring." if busy else
+                                    "Rasmni o'qib bo'lmadi. Qayta yuboring yoki matnni yozib yuboring.")
+    n = writing.count_words(text)
+    if n < 5:
+        return await wait.edit_text("Rasmdan matn o'qilmadi. Yozuv aniq ko'rinadigan, yorug' joyda, sahifa to'liq "
+                                    "kadrda bo'lgan rasm yuboring.")
+    comp = part_info("writing", _wmode(exam, data.get("part")))["components"][data.get("step", 0)]
+    await _drop_pending_kb(message, data)
+    shown = text if len(text) <= 3000 else text[:3000] + "…"
+    ask = await wait.edit_text(
+        f"📝 <b>Men shunday o'qidim:</b>\n\n<blockquote>{e(shown)}</blockquote>\n\n"
+        f"{e(writing.words_note(comp, n))}\n\n"
+        "Baho <b>shu matn</b> bo'yicha beriladi. So'z noto'g'ri o'qilgan bo'lsa (<code>[?]</code> - o'qib bo'lmagan so'z), "
+        "«📷 Qayta yuboraman»ni bosib aniqroq rasm yuboring yoki to'g'rilangan matnni o'zingiz yozib yuboring.",
+        parse_mode="HTML", reply_markup=_photo_confirm_kb())
+    await state.update_data(pending=text, pending_msg=ask.message_id)
+
+
 @router.message(WritingAnswer.text)
 async def writing_answer_wrong(message: Message):
-    await message.answer("Javobni <b>matn</b> ko'rinishida yuboring. Bekor qilish: /cancel", parse_mode="HTML")
+    await message.answer("Javobni <b>matn</b> yoki 📷 <b>qo'lyozma rasmi</b> ko'rinishida yuboring. Bekor qilish: /cancel",
+                         parse_mode="HTML")
 
 
 # ======================================================================
