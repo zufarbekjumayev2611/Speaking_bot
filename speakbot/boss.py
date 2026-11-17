@@ -33,8 +33,8 @@ def _amount(row: dict) -> tuple[int, bool]:
     digits = re.sub(r"\D", "", row.get("amount") or "")
     if len(digits) >= 4:
         return int(digits), True
-    price = plans.price_for(row.get("plan") or "pro")
-    return round(price * max(1, row.get("days") or 30) / plans.PERIOD_DAYS), False
+    plan = row.get("plan") or "pro"
+    return round(plans.price_for(plan) * max(1, row.get("days") or 30) / plans.period_days(plan)), False
 
 
 def _date(stamp: str | None) -> str:

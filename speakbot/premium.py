@@ -142,7 +142,7 @@ async def send_tariff_poster(bot, chat_id: int, uid: int):
     card = payments.card_text()
     caption = f"💳 <code>{e(card)}</code>" if card else f"💳 {e(db.admin_contact())}"
     rows = payments.pay_buttons()
-    if await access.limit_reached(uid):  # limiti tugagan obunachi - asosiy tugma «🔄 Yangi 30 kun boshlash»
+    if await access.limit_reached(uid):  # limiti tugagan obunachi - asosiy tugma «🔄 Yangi muddat boshlash»
         rows = [[payments.renew_button()]] + rows[1:]
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
     cached = db.setting(POSTER_KEY)
@@ -409,7 +409,7 @@ async def grant_note(message: Message, state: FSMContext):
         message.bot, target,
         ("🔄 Obunangiz yangidan boshlandi — limit to'liq yangilandi.\n" if restart else "")
         + f"{e(plans.name(plan))} <b>faollashtirildi!</b>\nTugash sanasi: <b>{_local(until)}</b>\n"
-        f"Har 30 kunda: {plans.limits_text(plan)}"
+        f"Limit ({plans.period_days(plan)} kun): {plans.limits_text(plan)}"
         + (" • 2 ekspert baholashi" if plans.raters_for(plan) > 1 else "") + ".\n\nOmad! 🎉",
     )
     text, kb = await _premium_view()
@@ -551,7 +551,7 @@ async def limit_plan(callback: CallbackQuery, state: FSMContext):
         now, ask = plans.money(plans.price_for(plan)), "Yangi narxni so'mda yozing (masalan <code>30000</code>)."
     else:
         lim = plans.limit_for(plan, field)
-        period = "oyiga" if plan == "free" else "har 30 kunda"
+        period = "oyiga" if plan == "free" else f"har {plans.period_days(plan)} kunda"
         now = "cheksiz" if lim is None else f"{period} {lim} ta"
         ask = f"{period.capitalize()} necha ta bo'lsin? Raqam yozing yoki cheksiz uchun <code>cheksiz</code>."
     await callback.message.answer(f"{e(plans.name(plan))} — {_FIELD_LABEL[field]}: hozir <b>{e(now)}</b>.\n\n{ask} "

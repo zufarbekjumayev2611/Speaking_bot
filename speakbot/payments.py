@@ -26,7 +26,6 @@ router = Router()
 router.message.filter(F.chat.type == "private")
 
 CARD_KEY = "card_number"
-PAY_DAYS = plans.PERIOD_DAYS
 _deciding: set[int] = set()  # bir chekni ikki admin bir vaqtda tasdiqlamasin
 
 
@@ -83,12 +82,12 @@ def pay_buttons() -> list[list[InlineKeyboardButton]]:
 
 
 RESTART_NOTE = ("🔄 <b>Limitingiz tugagan</b> — to'lov tasdiqlangach obuna <b>hozirdan yangidan</b> boshlanadi: "
-                "yangi 30 kun va to'liq limit (eski obunaning qolgan kunlari hisobga olinmaydi).")
+                "yangi muddat va to'liq limit (eski obunaning qolgan kunlari hisobga olinmaydi).")
 
 
 def renew_button() -> InlineKeyboardButton:
-    """Limiti tugagan obunachi uchun: qayta to'lov - yangi 30 kun va to'liq limit hoziroq."""
-    return InlineKeyboardButton(text="🔄 Yangi 30 kun boshlash", callback_data="pay")
+    """Limiti tugagan obunachi uchun: qayta to'lov - yangi muddat va to'liq limit hoziroq."""
+    return InlineKeyboardButton(text="🔄 Yangi muddat boshlash", callback_data="pay")
 
 
 def _plan_line(plan: str) -> str:
@@ -173,7 +172,7 @@ async def pay_receipt(message: Message, state: FSMContext):
                f"👤 {e(u.full_name)}{handle} (<code>{u.id}</code>)\n"
                f"📦 Tanlagan tarifi: <b>{e(_plan_line(plan))}</b>\n"
                + await _restart_line(u.id, plan) + "\n"
-               f"Pul tushganini tekshiring va summaga mos tarifni bosing — obuna {PAY_DAYS} kunga beriladi.")
+               f"Pul tushganini tekshiring va summaga mos tarifni bosing — obuna tarifga qarab 30 yoki 60 kunga beriladi.")
     sent = 0
     for admin_id in config.all_admin_ids():
         if not roles.can(admin_id, "premium"):
@@ -212,7 +211,7 @@ async def pay_card_again(callback: CallbackQuery):
     caption = (f"💳 <b>To'lov cheki #{pay['id']}</b>\n👤 {e(u.get('full_name') or pay['telegram_id'])}{handle} "
                f"(<code>{pay['telegram_id']}</code>)\n📦 Tanlagan tarifi: <b>{e(_plan_line(pay['plan']))}</b>\n"
                + await _restart_line(pay["telegram_id"], pay["plan"]) + "\n"
-               f"Pul tushganini tekshiring va summaga mos tarifni bosing — obuna {PAY_DAYS} kunga beriladi.")
+               f"Pul tushganini tekshiring va summaga mos tarifni bosing — obuna tarifga qarab 30 yoki 60 kunga beriladi.")
     send = callback.message.answer_photo if pay["file_type"] == "photo" else callback.message.answer_document
     await send(pay["file_id"], caption=caption, parse_mode="HTML", reply_markup=_admin_kb(pay["id"], pay["plan"]))
     await callback.answer()
@@ -226,9 +225,9 @@ async def _restart_line(user_id: int, plan: str | None = None) -> str:
                 "Tasdiqlansa tarif <b>almashadi</b> (eski bo'lim yopiladi, kunlar qo'shiladi). Ikkala bo'lim kerak bo'lsa — "
                 "Standard / Pro tarifini tasdiqlang.\n")
     if await access.limit_reached(user_id):
-        return "🔄 Limiti tugagan — tasdiqlansa obuna <b>hozirdan yangi 30 kunga</b> boshlanadi (to'liq limit).\n"
+        return "🔄 Limiti tugagan — tasdiqlansa obuna <b>hozirdan yangi muddatga</b> boshlanadi (to'liq limit).\n"
     if await db.get_premium(user_id):
-        return "➕ Faol obunasi bor — 30 kun tugash sanasiga qo'shiladi.\n"
+        return "➕ Faol obunasi bor — muddat tugash sanasiga qo'shiladi.\n"
     return ""
 
 
@@ -281,7 +280,7 @@ async def pay_approve(callback: CallbackQuery):
         if not await db.decide_payment(pid, "approved", callback.from_user.id, plan):
             await _close_card(callback, "ℹ️ Bu chekni boshqa admin allaqachon ko'rib chiqdi.")
             return await callback.answer("Bu chek allaqachon ko'rib chiqilgan.", show_alert=True)
-        until = await db.grant_premium(pay["telegram_id"], PAY_DAYS, str(plans.price_for(plan)),
+        until = await db.grant_premium(pay["telegram_id"], plans.period_days(plan), str(plans.price_for(plan)),
                                        callback.from_user.id, plan, restart=restart)
     finally:
         _deciding.discard(pid)
@@ -292,7 +291,7 @@ async def pay_approve(callback: CallbackQuery):
             f"🎉 <b>To'lovingiz tasdiqlandi!</b>\n"
             + ("🔄 Obunangiz yangidan boshlandi — limit to'liq yangilandi.\n" if restart else "")
             + f"{e(plans.name(plan))} faollashtirildi — "
-            f"<b>{_local(until)}</b> gacha.\nHar 30 kunda: {plans.limits_text(plan)}"
+            f"<b>{_local(until)}</b> gacha ({plans.period_days(plan)} kun).\nLimit: {plans.limits_text(plan)}"
             + (" • 2 ekspert baholashi" if plans.raters_for(plan) > 1 else "") + ".\n\n"
             + {"sp30": "«🎙 Konuşma»", "sp60": "«🎙 Konuşma»", "wr30": "«✍️ Yazma»",
                "wr60": "«✍️ Yazma»"}.get(plan, "«🎙 Konuşma» va «✍️ Yazma»") + " — omad! 🚀",
