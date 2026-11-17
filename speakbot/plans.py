@@ -3,10 +3,10 @@
 Limit Konuşma va Yazma uchun ALOHIDA, MOCK bilan hisoblanadi (mockni ochish - 1 ta; uning qismlari va
 qolgan qismlari shu davrda bepul; har qism bir marta ishlanadi):
   🆓 Bepul    — faqat 🎁 1 ta sinov mock (bir marta); qolgan mocklar ko'rinmaydi
-  ⭐ Standard — 30 ta mock (30 + 30), 59 000 so'm / 30 kun; ro'yxatda birinchi 30 ta mock ko'rinadi
-  💎 Pro      — 60 ta mock (60 + 60), 109 000 so'm / 30 kun, 2 ekspert baholashi; birinchi 60 ta mock
+  ⭐ Standard — 30 ta mock (30 + 30), 69 000 so'm / 30 kun; ro'yxatda birinchi 30 ta mock ko'rinadi
+  💎 Pro      — 60 ta mock (60 + 60), 129 000 so'm / 60 kun, 2 ekspert baholashi; birinchi 60 ta mock
   👑 VIP      — 100 + 100 (sotuvda emas)
-Pullik tarifda limit har 30 kunlik davrda yangilanadi (obuna 60 kunga berilsa - ikki davr).
+Limit butun obuna muddati uchun beriladi (period_days: 30 kun; Pro va 60 li tariflar - 60 kun).
 Limit va narxlarni admin «⚙️ Sozlamalar» dan o'zgartira oladi (bazada saqlanadi)."""
 import db
 from config import PREMIUM_ENABLED, RATERS
@@ -17,14 +17,17 @@ PERIOD_DAYS = 30
 
 PLANS = {
     "free": {"name": "Bepul", "icon": "🆓", "price": 0, "limits": {"speaking": 2, "writing": 2}, "raters": 1},
-    "standard": {"name": "Standard", "icon": "⭐", "price": 59000, "limits": {"speaking": 30, "writing": 30}, "raters": 1},
-    "pro": {"name": "Pro", "icon": "💎", "price": 109000, "limits": {"speaking": 60, "writing": 60}, "raters": 2},
+    "standard": {"name": "Standard", "icon": "⭐", "price": 69000, "limits": {"speaking": 30, "writing": 30}, "raters": 1},
+    "pro": {"name": "Pro", "icon": "💎", "price": 129000, "limits": {"speaking": 60, "writing": 60}, "raters": 2,
+            "days": 60},
     "vip": {"name": "VIP", "icon": "👑", "price": 70000, "limits": {"speaking": 100, "writing": 100}, "raters": 2},
     # Faqat bitta yo'nalish uchun tariflar (limit 0 - o'sha bo'lim bu tarifda yo'q)
-    "sp30": {"name": "Konuşma 30", "icon": "🎙", "price": 29000, "limits": {"speaking": 30, "writing": 0}, "raters": 1},
-    "sp60": {"name": "Konuşma 60", "icon": "🎤", "price": 49000, "limits": {"speaking": 60, "writing": 0}, "raters": 1},
-    "wr30": {"name": "Yazma 30", "icon": "✍️", "price": 29000, "limits": {"speaking": 0, "writing": 30}, "raters": 1},
-    "wr60": {"name": "Yazma 60", "icon": "📝", "price": 49000, "limits": {"speaking": 0, "writing": 60}, "raters": 1},
+    "sp30": {"name": "Konuşma 30", "icon": "🎙", "price": 39000, "limits": {"speaking": 30, "writing": 0}, "raters": 1},
+    "sp60": {"name": "Konuşma 60", "icon": "🎤", "price": 69000, "limits": {"speaking": 60, "writing": 0}, "raters": 1,
+             "days": 60},
+    "wr30": {"name": "Yazma 30", "icon": "✍️", "price": 39000, "limits": {"speaking": 0, "writing": 30}, "raters": 1},
+    "wr60": {"name": "Yazma 60", "icon": "📝", "price": 69000, "limits": {"speaking": 0, "writing": 60}, "raters": 1,
+             "days": 60},
 }
 SINGLE = ("sp30", "sp60", "wr30", "wr60")  # faqat Konuşma yoki faqat Yazma tariflari
 PAID = ("standard", "pro", "vip", *SINGLE)  # pullik tariflar (statistika, mavjud obunalar)
@@ -38,17 +41,30 @@ _UPDATE = {"price_standard": "59000", "price_pro": "109000",
            "limit_pro_speaking": "60", "limit_pro_writing": "60"}
 
 
+_UPDATE2_KEY = "plans_update_2026_11"  # tariflar afishasi (@CEFRTYS_BOT): yangi narxlar
+_UPDATE2 = {"price_standard": "69000", "price_pro": "129000", "price_sp30": "39000", "price_wr30": "39000",
+            "price_sp60": "69000", "price_wr60": "69000"}
+
+
 async def apply_update():
-    if db.setting(_UPDATE_KEY):
-        return
-    for key, value in _UPDATE.items():
-        await db.set_setting(key, value)
-    await db.set_setting(_UPDATE_KEY, "1")
+    if not db.setting(_UPDATE_KEY):
+        for key, value in _UPDATE.items():
+            await db.set_setting(key, value)
+        await db.set_setting(_UPDATE_KEY, "1")
+    if not db.setting(_UPDATE2_KEY):  # bir marta: keyin admin «⚙️ Sozlamalar»dan o'zgartirsa - qaytib ketmaydi
+        for key, value in _UPDATE2.items():
+            await db.set_setting(key, value)
+        await db.set_setting(_UPDATE2_KEY, "1")
 
 
 def on_sale(current: str | None = None) -> list[str]:
     """Sotuvdagi tariflar; o'quvchining hozirgi tarifi sotuvda bo'lmasa ham (masalan VIP) - ro'yxatda qoladi."""
     return [p for p in PAID if p in ON_SALE or p == current]
+
+
+def period_days(plan: str | None) -> int:
+    """Obuna muddati va limit davri (kun): Pro / 60 li tariflar - 60 kun, qolganlari - 30 kun."""
+    return _info(plan or "free").get("days", PERIOD_DAYS)
 
 
 def _info(plan: str) -> dict:
@@ -121,7 +137,7 @@ def offer_line(plan: str) -> str:
     """Tarif qatori: «⭐ Standard — 30 Konuşma + 30 Yazma — 30 000 so'm / 30 kun»."""
     line = f"{name(plan)} — {limits_text(plan)}"
     if plan != "free":
-        line += f" — <b>{money(price_for(plan))}</b> / {PERIOD_DAYS} kun"
+        line += f" — <b>{money(price_for(plan))}</b> / {period_days(plan)} kun"
     if raters_for(plan) > 1:
         line += " • 2 ekspert baholashi"
     return line

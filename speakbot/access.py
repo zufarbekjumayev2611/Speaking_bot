@@ -31,7 +31,7 @@ def period_bounds(prem: dict | None) -> tuple[str | None, str | None]:
         return None, None
     end = datetime.strptime(prem["until"], _FMT)
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    step = timedelta(days=plans.PERIOD_DAYS)
+    step = timedelta(days=plans.period_days(prem.get("plan")))  # Pro / 60 li tariflar - 60 kunlik davr
     start = datetime.strptime(prem.get("period_start") or db.legacy_period_start(prem["until"]), _FMT)
     while start + step <= now:  # obuna bir necha davrga berilgan - hozirgi davrni topamiz
         start += step
@@ -203,13 +203,13 @@ async def check_access(user_id: int, kind: str, _extra: int = 0, exam: dict | No
     if u["plan"] == "free":
         when = "Limit keyingi oy 1-sanada yangilanadi."
     elif u["next_reset"]:
-        when = f"Yangi 30 kunlik davr {_local_date(u['next_reset'])} da boshlanadi."
+        when = f"Yangi davr {_local_date(u['next_reset'])} da boshlanadi."
     else:
         when = f"Obunangiz {_local_date(u['until'])} gacha."
     if u["plan"] == "free":
         upsell = f" Ko'proq kerak bo'lsa — «🚀 Tarifni yaxshilash» yoki admin: {db.admin_contact()}."
     else:  # pullik: kutmasdan qayta sotib olsa - yangi 30 kun va to'liq limit hoziroq
-        upsell = " Kutmasdan: «🔄 Yangi 30 kun» — limit hoziroq yangilanadi."
+        upsell = " Kutmasdan: «🔄 Yangi muddat» — limit hoziroq yangilanadi."
     return False, f"{label} limiti tugadi ({used}/{u['limit']} mock). {when}{upsell}"
 
 
@@ -264,7 +264,7 @@ async def usage_text(user_id: int) -> str:
     if info["plan"] == "free":
         return await trial_status(user_id)
     if info["next_reset"]:
-        return f"Shu 30 kunda: {text}\n(yangi davr {_local_date(info['next_reset'])} da)"
+        return f"Shu davrda: {text}\n(yangi davr {_local_date(info['next_reset'])} da)"
     return f"Shu davrda: {text}"
 
 
@@ -282,7 +282,7 @@ async def usage_block(user_id: int) -> str:
     if info["plan"] == "free":
         lines.append("🔄 Bepul limit har oyning 1-sanasida yangilanadi")
     elif info["next_reset"]:
-        lines.append(f"🔄 Yangi 30 kunlik davr: {_local_date(info['next_reset'])}")
+        lines.append(f"🔄 Yangi davr: {_local_date(info['next_reset'])}")
     return "\n".join(lines)
 
 

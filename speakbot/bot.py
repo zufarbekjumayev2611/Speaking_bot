@@ -409,8 +409,8 @@ async def _mocks_view(user_id: int, page: int = 0, kind: str | None = None):
         lines.append(f"\n💼 {await usage_text(user_id)}\n<i>Mockni ochsangiz, limitdan 1 ta olinadi. Har bir qism "
                      "<b>bir marta</b> ishlanadi — ishlangan mockni qayta ishlab bo'lmaydi.</i>")
     if renew:  # obunachi limitni muddatidan oldin tugatdi - kutmasdan qayta boshlashi mumkin
-        lines.append("\n🔄 <b>Limitingiz tugadi.</b> Kutish shart emas — «🔄 Yangi 30 kun boshlash» tugmasi bilan "
-                     "tarifni qayta oling: obuna hozirdan yangi 30 kunga boshlanadi va limit to'liq yangilanadi.")
+        lines.append("\n🔄 <b>Limitingiz tugadi.</b> Kutish shart emas — «🔄 Yangi muddat boshlash» tugmasi bilan "
+                     "tarifni qayta oling: obuna hozirdan yangidan boshlanadi va limit to'liq yangilanadi.")
         upgrade = [payments.renew_button()]
     more = False
     if hidden and not trial_only:  # obunachi: tarifiga kirmagan mocklar bor - sotuvda kattaroq tarif bo'lsa taklif

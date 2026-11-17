@@ -114,17 +114,20 @@ kichik raqamli mock. Ro'yxatda sinov mock 🎁 bilan belgilanadi. `PREMIUM_ENABL
 | Tarif | Mocklar | Narx | Qo'shimcha |
 |---|---|---|---|
 | 🆓 Bepul | 🎁 1 ta sinov mock (bir marta) | — | qolgan mocklar ko'rinmaydi |
-| ⭐ Standard | 30 ta mock (30 Konuşma + 30 Yazma) | 59 000 so'm / 30 kun | ro'yxatdagi **birinchi 30 ta** mock ko'rinadi |
-| 💎 Pro | 60 ta mock (60 Konuşma + 60 Yazma) | 109 000 so'm / 30 kun | **birinchi 60 ta** mock, 2 ekspert baholashi |
+| ⭐ Standard | 30 ta mock (30 Konuşma + 30 Yazma) | 69 000 so'm / 30 kun | ro'yxatdagi **birinchi 30 ta** mock ko'rinadi |
+| 💎 Pro | 60 ta mock (60 Konuşma + 60 Yazma) | 129 000 so'm / **60 kun** | **birinchi 60 ta** mock, 2 ekspert baholashi |
 
-**Faqat bir yo'nalishli tariflar** (30 kun, ikkinchi bo'lim bu tarifda yo'q):
+**Faqat bir yo'nalishli tariflar** (ikkinchi bo'lim bu tarifda yo'q; narx va muddat tariflar afishasiga mos):
 
-| Tarif | Narx | Limit |
-|---|---|---|
-| 🎙 Konuşma 30 | 29 000 so'm | 30 ta Konuşma mock |
-| 🎤 Konuşma 60 | 49 000 so'm | 60 ta Konuşma mock |
-| ✍️ Yazma 30 | 29 000 so'm | 30 ta Yazma mock |
-| 📝 Yazma 60 | 49 000 so'm | 60 ta Yazma mock |
+| Tarif | Narx | Muddat | Limit |
+|---|---|---|---|
+| 🎙 Konuşma 30 | 39 000 so'm | 30 kun | 30 ta Konuşma mock |
+| ✍️ Yazma 30 | 39 000 so'm | 30 kun | 30 ta Yazma mock |
+| 🎤 Konuşma 60 | 69 000 so'm | 60 kun | 60 ta Konuşma mock |
+| 📝 Yazma 60 | 69 000 so'm | 60 kun | 60 ta Yazma mock |
+
+Limit butun muddat uchun beriladi (60 kunlik tarifda 60 mock 60 kun ichida). Narxlar birinchi ishga tushishda
+bazaga bir marta yoziladi (`plans.apply_update`); keyin «⚙️ Sozlamalar»dan o'zgartirsangiz, qaytib ketmaydi.
 
 Yopiq bo'lim (masalan Konuşma tarifida Yazma) ochilmaydi va o'quvchiga tegishli tarif haqida xabar chiqadi
 (`plans.py` da limit `0`). Narx va limitlar «⚙️ Sozlamalar»dan o'zgartiriladi.
