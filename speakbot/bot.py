@@ -750,8 +750,8 @@ async def writing_answer(message: Message, state: FSMContext):
             "«✏️ Qayta yozaman»ni bosing va to'liq matnni yangi xabar qilib yuboring.",
             reply_markup=_short_text_kb(),
         )
-        return await state.update_data(pending=text, pending_msg=ask.message_id)
-    await state.update_data(pending=None, pending_msg=None)
+        return await state.update_data(pending=text, pending_msg=ask.message_id, pending_photo=False)
+    await state.update_data(pending=None, pending_msg=None, pending_photo=False)
     await _accept_component(message, state, text, message.from_user)
 
 
@@ -804,6 +804,12 @@ async def _accept_component(target: Message, state: FSMContext, text: str, user)
     step = data.get("step", 0)
     texts = dict(data.get("texts") or {})
     texts[comps[step]["key"]] = text
+    photo_keys = set(data.get("photo_keys") or [])
+    if data.get("pending_photo"):  # matn qo'lyozma rasmidan o'qilgan - baholashda nuqta/diakritik farqi hisobga olinmaydi
+        photo_keys.add(comps[step]["key"])
+    else:
+        photo_keys.discard(comps[step]["key"])
+    await state.update_data(photo_keys=sorted(photo_keys), pending_photo=False)
     note = writing.words_note(comps[step], writing.count_words(text))
 
     if step + 1 < len(comps):  # keyingi matnni so'raymiz
@@ -844,7 +850,8 @@ async def _grade_writing_chat(target: Message, state: FSMContext, user):
     wait = await target.answer("⏳ Ishingiz rasmiy mezonlar bo'yicha tekshirilmoqda... (20–60 soniya)")
     try:
         result, fresh = await writing.grade_and_store(
-            target.bot, user.id, user.full_name, exam, data.get("texts") or {}, data.get("elapsed")
+            target.bot, user.id, user.full_name, exam, data.get("texts") or {}, data.get("elapsed"),
+            photo_keys=data.get("photo_keys")
         )
     except writing.WritingBusy as busy:
         return await wait.edit_text(f"⏳ {busy}")
@@ -961,7 +968,7 @@ async def writing_photo(message: Message, state: FSMContext):
         "Baho <b>shu matn</b> bo'yicha beriladi. So'z noto'g'ri o'qilgan bo'lsa (<code>[?]</code> - o'qib bo'lmagan so'z), "
         "«📷 Qayta yuboraman»ni bosib aniqroq rasm yuboring yoki to'g'rilangan matnni o'zingiz yozib yuboring.",
         parse_mode="HTML", reply_markup=_photo_confirm_kb())
-    await state.update_data(pending=text, pending_msg=ask.message_id)
+    await state.update_data(pending=text, pending_msg=ask.message_id, pending_photo=True)
 
 
 @router.message(WritingAnswer.text)

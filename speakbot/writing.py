@@ -336,7 +336,7 @@ def joined_text(part: str | None, texts: dict) -> str:
 
 
 async def grade_and_store(bot, user_id: int, user_name: str, exam: dict, texts: dict,
-                          elapsed_sec: int | None = None) -> tuple[dict, bool]:
+                          elapsed_sec: int | None = None, photo_keys=None) -> tuple[dict, bool]:
     """Ishni tekshiradi, saqlaydi, natijani o'quvchiga va adminlarga yuboradi.
     (natija, yangimi) qaytaradi: aynan shu matn yaqinda tekshirilgan bo'lsa - eski natija (False)
     qaytadi, qayta baholanmaydi va limit sarflanmaydi. Rad etilsa - WritingDenied."""
@@ -369,7 +369,8 @@ async def grade_and_store(bot, user_id: int, user_name: str, exam: dict, texts: 
         words = sum(count_words(t) for t in texts.values())
         submission_id = await db.create_writing_submission(user_id, exam["id"], joined, words)
         try:
-            result = await grader.grade_writing(tasks, texts, part, plans.raters_for(await get_plan(user_id)))
+            result = await grader.grade_writing(tasks, texts, part, plans.raters_for(await get_plan(user_id)),
+                                                photo_keys=photo_keys)
         except Exception as err:
             log.exception("Writing baholash xatosi (submission %s)", submission_id)
             await grader.report_key_problem(bot, err)
