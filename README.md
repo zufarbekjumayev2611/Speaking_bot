@@ -107,22 +107,6 @@ to'liq ishlanishi bilan bot o'quvchiga tariflar sahifasini («🚀 Tarifni yaxsh
 Qaysi mock sinov: Admin → 📚 Mocklar → mockni oching → «🎁 Sinov mock qilish». Tanlanmagan bo'lsa — savoli bor eng
 kichik raqamli mock. Ro'yxatda sinov mock 🎁 bilan belgilanadi. `PREMIUM_ENABLED=0` bo'lsa cheklov yo'q.
 
-## 📷 Qo'lyozma rasmi (Yazma, chatda yozish)
-
-Yazma matnini xabar o'rniga qo'lyozma **rasmi** qilib yuborish mumkin («💬 Chatda yozish» rejimida). Claude rasmni
-so'zma-so'z matnga o'giradi (xatolarni tuzatmaydi, o'qib bo'lmagan so'z — `[?]`), bot «Men shunday o'qidim» deb
-ko'rsatadi, o'quvchi «✅ To'g'ri, tekshirilsin» bosgach matn odatdagidek baholanadi. Baholash va limit o'zgarmagan.
-- Rasmni o'qish modeli `TRANSCRIBE_MODEL` (standart `claude-sonnet-5-5`; baholash `CLAUDE_MODEL` da qoladi),
-  diqqati `TRANSCRIBE_EFFORT` (`low`/`medium`/`high`, standart `high`). Prompt xatolarni **tuzatmasdan** harfma-harf
-  ko'chirishga o'rgatilgan; baribir tuzatib yuborgan so'zlar bo'lsa, `high` ni sinab ko'ring.
-- Faqat `ANTHROPIC_API_KEY` bo'lganda ishlaydi (Groq rasmni ko'rmaydi); kalit yo'q bo'lsa matn yozish so'raladi.
-- **`ı/i` (nuqtali/nuqtasiz i) xatolari rasmdan o'qilgan matnda hisobga olinmaydi:** faqat shu farqdan iborat "xato"lar
-  ro'yxatdan chiqariladi va baholovchiga eslatma beriladi (rasmda bu belgi noto'g'ri o'qilishi mumkin). `ş/ç/ğ/ü/ö`
-  belgisi tushib qolgan so'zlar esa haqiqiy xato sifatida baholanadi. Ko'chirish prompti AI diakritikni (`ş ç ğ ü ö ı`) tushirib qoldirmasligiga alohida urg'u beradi. Yozib yuborilgan matnga bu qo'llanmaydi.
-- Bitta matn uchun ko'pi bilan 3 ta rasm (`PHOTO_TRIES`), rasm ≤ 5 MB. Telegram «rasm» sifatida siqadi —
-  mayda yozuv uchun «fayl» qilib yuborish aniqroq.
-- Taxminiy sarf: rasm ≈ 1 500 kirish + 400–600 chiqish token (o'qish, Sonnet 5.5 ≈ $0.008), baholash — avvalgidek.
-
 ## Tariflar va admin panel
 
 **Tariflar** — Konuşma va Yazma limiti **alohida** hisoblanadi:
