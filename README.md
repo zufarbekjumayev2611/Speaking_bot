@@ -113,9 +113,12 @@ Yazma matnini xabar o'rniga qo'lyozma **rasmi** qilib yuborish mumkin («💬 Ch
 so'zma-so'z matnga o'giradi (xatolarni tuzatmaydi, o'qib bo'lmagan so'z — `[?]`), bot «Men shunday o'qidim» deb
 ko'rsatadi, o'quvchi «✅ To'g'ri, tekshirilsin» bosgach matn odatdagidek baholanadi. Baholash va limit o'zgarmagan.
 - Rasmni o'qish modeli `TRANSCRIBE_MODEL` (standart `claude-sonnet-5-5`; baholash `CLAUDE_MODEL` da qoladi),
-  diqqati `TRANSCRIBE_EFFORT` (`low`/`medium`/`high`, standart `medium`). Prompt xatolarni **tuzatmasdan** harfma-harf
+  diqqati `TRANSCRIBE_EFFORT` (`low`/`medium`/`high`, standart `high`). Prompt xatolarni **tuzatmasdan** harfma-harf
   ko'chirishga o'rgatilgan; baribir tuzatib yuborgan so'zlar bo'lsa, `high` ni sinab ko'ring.
 - Faqat `ANTHROPIC_API_KEY` bo'lganda ishlaydi (Groq rasmni ko'rmaydi); kalit yo'q bo'lsa matn yozish so'raladi.
+- **Nuqta/diakritik xatolari rasmdan o'qilgan matnda hisobga olinmaydi:** faqat `ı/i`, `ö/o`, `ü/u`, `ş/s`, `ç/c`, `ğ/g` farqidan
+  iborat "xato"lar ro'yxatdan chiqariladi va baholovchiga shu haqda eslatma beriladi (rasmda bunday mayda belgi noto'g'ri
+  o'qilishi mumkin). Boshqa imlo va grammatika xatolari odatdagidek baholanadi. Yozib yuborilgan matnga bu qo'llanmaydi.
 - Bitta matn uchun ko'pi bilan 3 ta rasm (`PHOTO_TRIES`), rasm ≤ 5 MB. Telegram «rasm» sifatida siqadi —
   mayda yozuv uchun «fayl» qilib yuborish aniqroq.
 - Taxminiy sarf: rasm ≈ 1 500 kirish + 400–600 chiqish token (o'qish, Sonnet 5.5 ≈ $0.008), baholash — avvalgidek.

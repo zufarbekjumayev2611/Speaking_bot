@@ -254,6 +254,11 @@ So'z lug'atdagi shaklga o'xshamasa yoki xato yozilgan bo'lsa ham - o'quvchi nima
   harfni ham, qo'shib yoki ajratib yozilgan so'zlarni ham (masalan "birçok" / "bir çok"), noto'g'ri qo'shimchalarni ham saqla.
 - Katta-kichik harfni, tinish belgilarini (yo'q bo'lsa - yo'q, noto'g'ri bo'lsa - noto'g'ri) aynan saqla; apostrofni o'zing qo'shma.
 - Abzaslarni va qatorlarni saqla (abzas orasida bo'sh qator). Qator oxiridagi defis bilan bo'lingan so'zni birlashtirib yoz.
+- Yozishdan OLDIN har bir so'zni qayta tekshir: yozgan harflaring rasmdagi harflar bilan bir xilmi? Agar yozgan shaklingni
+  "to'g'ri imlo"ga rasmdagidan ko'ra yaqinroq deb sezsang - to'xta va rasmga qayta qara: sen tuzatib yuborgan bo'lishing mumkin.
+- Misollar (rasmdagi yozuv -> sen yozadigan matn): nuqtali "i" bilan yozilgan "Nasilsin" -> Nasilsin (Nasılsın EMAS);
+  "yapıcam" -> yapıcam (yapacağım EMAS); "Sende" -> Sende (Sen de EMAS); "birçok" va "bir çok" - qanday yozilgan bo'lsa shunday;
+  "gidiyom" -> gidiyom (gidiyorum EMAS); katta harf kerak bo'lgan joyda kichik harf yozilgan bo'lsa - kichik harf.
 - Aniq o'qib bo'lmaydigan so'z o'rniga [?] qo'y; taxmin bilan so'z to'qima va "ehtimol shu" deb to'g'ri so'zni qo'yma.
 - Faqat o'quvchi yozgan matnni yoz; sarlavha, raqam yoki ball belgisi, rasmdagi tashqi yozuvlar (kanal reklamasi, ism-sharif
   maydoni) va chizib tashlangan so'zlarni qo'shma. Izoh, tarjima yoki tuzatish yozma.
@@ -631,9 +636,28 @@ async def verify_mistakes(answer: str, mistakes: list[dict]) -> list[dict]:
     return dedupe_mistakes(mistakes)[:MAX_MISTAKES]
 
 
-async def grade_writing(tasks, texts: dict, part: str | None, raters: int | None = None) -> dict:
+_TR_FOLD = str.maketrans({"ı": "i", "İ": "i", "I": "i", "ö": "o", "Ö": "o", "ü": "u", "Ü": "u", "ş": "s", "Ş": "s",
+                          "ç": "c", "Ç": "c", "ğ": "g", "Ğ": "g", "â": "a", "Â": "a", "î": "i", "Î": "i", "û": "u", "Û": "u"})
+
+
+def _fold(text) -> str:
+    """Nuqta / diakritik farqini yo'qotadi (ı=i, ö=o, ü=u, ş=s, ç=c, ğ=g): "Nasılsın" ~ "nasilsin"."""
+    return re.sub(r"\s+", " ", str(text or "").translate(_TR_FOLD).casefold()).strip()
+
+
+def drop_diacritic_only(mistakes: list) -> list:
+    """Qo'lyozma rasmidan o'qilgan matn uchun: faqat nuqta/diakritik farqidan iborat "xato"lar (ı/i, ö/o, ü/u, ş/s, ç/c,
+    ğ/g) olib tashlanadi - rasmda bunday mayda belgini AI noto'g'ri o'qigan bo'lishi mumkin, o'quvchi ayblanmasin."""
+    return [m for m in mistakes if _fold(m.get("wrong")) != _fold(m.get("correct"))]
+
+
+
+async def grade_writing(tasks, texts: dict, part: str | None, raters: int | None = None,
+                        photo_keys=None) -> dict:
     """tasks: {"email1": "...", ...} - har bir matn uchun topshiriq (yoki bitta umumiy matn - str).
-    texts: {"email1": "...", "email2": "..."} (1-qism), {"essay": "..."} (2-qism) yoki uchalasi (to'liq)."""
+    texts: {"email1": "...", "email2": "..."} (1-qism), {"essay": "..."} (2-qism) yoki uchalasi (to'liq).
+    photo_keys - qo'lyozma rasmidan o'qilgan matnlar kalitlari: ularda nuqta/diakritik farqi xato hisoblanmaydi."""
+    photo_keys = set(photo_keys or ())
     p = part_info("writing", part)
     comps = p["components"]
 
@@ -648,8 +672,15 @@ async def grade_writing(tasks, texts: dict, part: str | None, raters: int | None
                 f"TOPSHIRIQ:\n{task}\n\n"
                 f"O'QUVCHI MATNI - {c['name']} ({words} so'z; talab: {c['words']}):\n{answer}"
             )
+            photo = c["key"] in photo_keys
+            if photo:
+                user += ("\n\nESLATMA: bu matn qo'lyozma RASMIDAN o'qilgan. Harflardagi nuqta va belgilar farqlari "
+                         "(ı/i, ö/o, ü/u, ş/s, ç/c, ğ/g) o'qish xatosi bo'lishi mumkin - ularni xato deb ko'rsatma va "
+                         "shu sababli ballni tushirma. Boshqa imlo va grammatika xatolarini odatdagidek baholagin.")
             res = await _grade_component("writing", writing_prompt(c), user, c["max"], raters, answer)
             res["mistakes"] = await verify_mistakes(answer, res["mistakes"])
+            if photo:
+                res["mistakes"] = drop_diacritic_only(res["mistakes"])
         res.update(name=c["name"], max=c["max"], words=words, label=_label(c["labels"], res["band"]))
         return res
 
